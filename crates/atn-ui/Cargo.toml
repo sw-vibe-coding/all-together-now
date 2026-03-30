@@ -1,0 +1,7 @@
+[package]
+name = "atn-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Yew and web dependencies will be added in Phase 2

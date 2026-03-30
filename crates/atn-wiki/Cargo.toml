@@ -1,0 +1,17 @@
+[package]
+name = "atn-wiki"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+atn-core = { workspace = true }
+wiki-common = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { version = "1", features = ["full", "test-util"] }

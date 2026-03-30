@@ -1,0 +1,16 @@
+[package]
+name = "atn-trail"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+atn-core = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { version = "1", features = ["full", "test-util"] }

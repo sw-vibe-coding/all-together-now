@@ -1,0 +1,1424 @@
+
+
+
+
+Okay, I've tried two approaches to coordinating a team of AI agents such that I can manage their progress towards a goal collaboratively.  My first attempt was to use a shared git repo (local clone of a "central" shared bare git repo), where each agent had its own clone, and the repo contained the files that represented a Kanban board (prioritized backlog, wip tracking, pull-model) with roles: a PM groomed the backlog, re-prioritizing task.  The PM would also take completed work and acceptance test it.  A developer agent would pull a task, mark it in-progress, work until done, and move it to a done state.  A QA agent would take a dev-done task, test it, and move it to a needs-work state or a ready-for-acceptance testing state.  This proved to be brittle and required me to ask agents to check for work, update the shared "board."  
+
+More recently I had the case where around 8 tabs were opene, each for a different github repo, each with a dev agent adding features, fixing a bug, or waiting.   This was a mixture of tools and libraries and applications.  One of the "top" repos in the dependency graph was blocked by one or more other agents (missing features, unfixed bugs).  I asked it to coordinate through a shared Wiki with some logic to serialize agent updates.  This way agents could share the state of their work, see requests to add a feature or fix a bug,update the wiki, and more importantly share differenent perspectives globally (each repo had a subset of the documentation relative to its development and a partial view of the big picture).  The co-ordinator (at my direction) created a MVP page (overall goal), a coordination page (which agent is working on what), a requests page (this bug nnn is blocking me).  etc.  But it did not get me out of the loop as I would have to ask the coordiator for which agent(s) to "poke" (remind them to see if a bug or feature-request was assgined to them; or remind them to try/test a bug-fix or new feature.  There is no way to "push" requests or updates to the agents (they do not naturally poll).  
+
+So I want a mechanism which types into each agent's terminal input when the agent needs to read the wiki to handle a request or to evaluate a response.  I'm thinking some sort of pty mechanism that lets me share the keyboard with the tool so we can both type commands to the agents.  How can I implement this in Rust in a portable way for Mac and Linux?
+
+
+Thought for 15s
+You want a portable Rust control plane for interactive AI-agent terminals on macOS and Linux, where:
+
+each agent runs inside a PTY, not a normal inherited stdin/stdout shell,
+
+your coordinator can inject keystrokes/commands into that PTY when needed,
+
+the agent still behaves like it is in a real terminal,
+
+you can optionally share control with a human operator,
+
+and you want to reduce manual “poke this agent now” work.
+
+The cleanest architecture is:
+
+High-level design
+Core idea
+Do not try to “share the keyboard” of an already-open Terminal/iTerm/GNOME Terminal tab.
+
+Instead, make your Rust program own the PTY master for every agent session, and run the agent process on the PTY slave. Then your program becomes the terminal multiplexer / broker:
+
+reads agent output from PTY master
+
+writes operator input to PTY master
+
+writes coordinator-triggered commands to PTY master
+
+records transcript/state
+
+detects prompts / idleness / blockers
+
+injects reminders like “read the coordination wiki page X”
+
+That is the right abstraction boundary.
+
+On Unix-like systems, PTYs are exactly for this: openpty() gives you a master/slave pair, and forkpty() is the classic “spawn a child attached to a pseudo-terminal” helper. On macOS specifically, forkpty() is documented as combining openpty(), fork(), and login_tty(). 
+
+Best Rust crate choice
+For macOS + Linux portability, the first thing I would reach for is portable-pty. Its docs explicitly describe it as a cross-platform PTY API, and it supports opening a PTY, spawning a shell/command into it, cloning a reader, and writing to the PTY master. It is part of the WezTerm ecosystem. 
+
+That is better than building directly on nix::pty unless you specifically want low-level Unix-only control.
+
+Recommended architecture
+Process model
+Use one Rust “supervisor” process with these subsystems:
+
+1. Session manager
+Owns all agent sessions.
+
+For each agent:
+
+PTY pair
+
+child process handle
+
+transcript log
+
+current state
+
+repo/project metadata
+
+last-seen prompt / last activity timestamp
+
+pending requests queue
+
+2. Input router
+Merges multiple input sources:
+
+human operator keystrokes
+
+automation/coordinator commands
+
+maybe scripted macros
+
+3. Output parser
+Consumes PTY output stream and emits events:
+
+prompt ready
+
+command started
+
+command finished
+
+build failed
+
+tests failed
+
+waiting for input
+
+blocked on dependency
+
+idle for N seconds
+
+4. Policy engine
+Decides when to inject text:
+
+“re-read wiki coordination page”
+
+“pull latest branch from dependency repo”
+
+“run acceptance tests”
+
+“bug #123 has been fixed; verify”
+
+5. UI
+Minimal version:
+
+one curses/TUI dashboard showing agent states
+
+select an agent and attach interactively
+
+hotkeys for “send reminder”, “paste command”, “broadcast”
+
+Later:
+
+web UI over Axum + websocket
+
+live transcript panes
+
+dependency graph / blocked-by graph
+
+Why PTY ownership is better than typing into existing tabs
+Because the alternatives are brittle.
+
+Bad option: OS-level synthetic key events
+You could try to target existing terminal windows and synthesize keystrokes:
+
+macOS: Accessibility / AppleScript / Quartz event APIs
+
+Linux: X11 tools, Wayland complications, compositor/security problems
+
+Problems:
+
+fragile focus handling
+
+terminal window must be frontmost or correctly targeted
+
+different terminal emulators behave differently
+
+copy/paste and timing races are ugly
+
+Wayland increasingly resists this model
+
+This is the “looks easy, becomes a mess” route.
+
+Good option: your own PTY-backed sessions
+Advantages:
+
+portable across macOS and Linux
+
+deterministic
+
+no window focus problems
+
+full transcript capture
+
+easy to log, replay, test
+
+lets you build real coordination features later
+
+Concrete Rust approach
+Choice A — recommended
+Use portable-pty for PTY creation/spawn, plus async I/O around it.
+
+This crate exposes:
+
+native_pty_system()
+
+openpty(...)
+
+spawn_command(...)
+
+try_clone_reader()
+
+take_writer()
+
+That maps almost exactly to your use case. 
+
+Choice B — lower-level Unix-only
+Use nix::pty::openpty / forkpty.
+
+This gives more control, but:
+
+more unsafe / Unix-specific plumbing
+
+more termios/session handling detail
+
+less future portability
+
+more code to maintain
+
+nix::pty exposes openpty, forkpty, and related PTY primitives under its term feature. 
+
+Design details
+Session object
+Something like:
+
+pub struct AgentSession {
+    pub id: AgentId,
+    pub name: String,
+    pub repo_path: PathBuf,
+    pub role: AgentRole,
+    pub child_pid: u32,
+    pub tx_input: tokio::sync::mpsc::Sender<InputEvent>,
+    pub rx_output: tokio::sync::broadcast::Sender<OutputEvent>,
+    pub state: Arc<tokio::sync::RwLock<AgentState>>,
+}
+Where InputEvent is:
+
+pub enum InputEvent {
+    HumanBytes(Vec<u8>),
+    CoordinatorCommand(String),
+    Control(ControlAction),
+}
+And OutputEvent is:
+
+pub enum OutputEvent {
+    Bytes(Vec<u8>),
+    PromptDetected,
+    BecameIdle,
+    BuildFailed(String),
+    TestFailed(String),
+    BlockedOn(String),
+}
+Keystroke injection model
+Do not literally model every action as a physical keypress unless you need that.
+
+Use three levels:
+
+Level 1: paste full command
+Most useful:
+
+open coordination page
+read request 14
+ack request 14
+Injected as:
+
+writer.write_all(b"my-agent-cli read-wiki requests/14.md\n")?;
+Level 2: raw bytes
+For arrow keys, Ctrl-C, etc.
+
+Examples:
+
+Enter: \r
+
+Ctrl-C: 0x03
+
+Up arrow: escape sequence
+
+Level 3: attach human live session
+Human temporarily becomes the active input source for that PTY.
+
+Shared keyboard model
+You said you want “some sort of pty mechanism that lets me share the keyboard with the tool so we can both type commands.”
+
+That is feasible, but you should make it serialized, not true concurrent typing.
+
+Recommended arbitration
+For each agent PTY, allow exactly one active writer at a time:
+
+Human
+
+Coordinator
+
+Macro
+
+None
+
+Then support:
+
+request control
+
+grant control
+
+preempt for emergency
+
+release control
+
+Why? Because if human and coordinator both write at the same time, the bytes interleave and you get garbage.
+
+So “shared keyboard” should really mean:
+
+both are authorized writers,
+
+but writes are queued and serialized.
+
+Practical rule
+human interactive attach = exclusive writer
+
+coordinator can enqueue “pending poke”
+
+when human detaches or prompt is idle, coordinator injects pending command
+
+That will feel much saner.
+
+Detecting when it is safe to inject
+This is important.
+
+If you inject text while the agent is mid-command, you may corrupt its input stream.
+
+Use some combination of:
+
+1. Prompt detection
+Recognize shell prompt patterns:
+
+custom PS1
+
+special sentinel prompt like __AGENT_READY__>
+
+Best practice:
+launch each shell with a known prompt.
+
+For example, start bash/zsh with startup config that sets:
+
+export PS1="__AGENT__$ "
+Then your parser can detect readiness reliably.
+
+2. Bracket commands with sentinels
+When you inject commands, wrap them:
+
+printf '__CMD_START__\n'
+some-command-here
+status=$?
+printf '__CMD_DONE__:%s\n' "$status"
+Now your supervisor can parse command completion robustly.
+
+3. Idle timers
+If no output for N seconds and prompt visible, agent is likely ready.
+
+4. Optional shell helper
+Install a tiny shell helper function in the agent session:
+
+agent_read_wiki() { ... }
+agent_ack() { ... }
+Then coordinator commands become simple and structured.
+
+Suggested control protocol
+Instead of blindly typing arbitrary prose into agent terminals, give each agent a tiny local command vocabulary.
+
+For example:
+
+coord sync
+coord inbox
+coord open REQ-17
+coord ack REQ-17
+coord status
+coord unblock
+That means the coordinator only needs to inject:
+
+coord inbox
+and the agent-side tooling does the right thing.
+
+This is much more reliable than pasting long English instructions every time.
+
+Rust crate stack
+A solid stack would be:
+
+portable-pty for PTY abstraction/spawn 
+
+tokio for async tasks and channels
+
+crossterm or ratatui for TUI
+
+serde / serde_json / toml for session state/config
+
+tracing for structured logs
+
+optionally vt100 or similar terminal parser if you want to maintain a terminal screen model
+
+Minimal code sketch
+Here is the basic PTY pattern.
+
+use anyhow::{Context, Result};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize, PtySystem};
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+pub struct PtyAgent {
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl PtyAgent {
+    pub fn spawn(shell: &str, cwd: &std::path::Path) -> Result<Self> {
+        let pty_system = native_pty_system();
+
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 40,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .context("openpty failed")?;
+
+        let mut cmd = CommandBuilder::new(shell);
+        cmd.cwd(cwd);
+
+        let _child = pair
+            .slave
+            .spawn_command(cmd)
+            .context("spawn_command failed")?;
+
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .context("clone reader failed")?;
+
+        let writer = pair.master.take_writer().context("take writer failed")?;
+        let writer = Arc::new(Mutex::new(writer));
+
+        thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let s = String::from_utf8_lossy(&buf[..n]);
+                        print!("{s}");
+                    }
+                    Err(err) => {
+                        eprintln!("pty read error: {err}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self { writer })
+    }
+
+    pub fn send_line(&self, line: &str) -> Result<()> {
+        let mut w = self.writer.lock().unwrap();
+        w.write_all(line.as_bytes())?;
+        w.write_all(b"\n")?;
+        w.flush()?;
+        Ok(())
+    }
+
+    pub fn send_raw(&self, bytes: &[u8]) -> Result<()> {
+        let mut w = self.writer.lock().unwrap();
+        w.write_all(bytes)?;
+        w.flush()?;
+        Ok(())
+    }
+}
+That is the core mechanism: your program owns the PTY and can write commands to it at will.
+
+A better practical pattern
+For your use case, I would not stop at “send text to shell”.
+
+I would define a supervised agent session:
+
+Startup sequence per agent
+spawn shell in PTY
+
+set deterministic prompt
+
+cd into repo
+
+source a small helper script
+
+register session with coordinator
+
+Example injected startup:
+
+export PS1="__AGENT_READY__> "
+cd /path/to/repo
+source .coord/agent-shell.sh
+echo "__SESSION_READY__"
+Then your Rust supervisor watches for __SESSION_READY__.
+
+Injected work cycle
+When dependency changes or wiki updates:
+
+queue request for target agent
+
+wait for prompt-ready state
+
+inject:
+
+coord inbox
+parse output for ack/result
+
+Nonfunctional requirements and concerns
+Reliability
+Biggest risk is input corruption from writing at the wrong time.
+
+Mitigations:
+
+known prompt
+
+serialized writer ownership
+
+command sentinels
+
+per-session state machine
+
+Portability
+On macOS + Linux, PTY-based design is good.
+
+Do not depend on:
+
+AppleScript terminal automation
+
+Xdotool/Wayland hacks
+
+emulator-specific integration
+
+Security
+If your coordinator injects commands, it can do anything the shell can do.
+
+So:
+
+scope each agent to a repo/workdir
+
+maybe run agents under dedicated Unix users if you want isolation
+
+log every injected command
+
+Recoverability
+You want:
+
+transcript replay
+
+restartable sessions
+
+detection of dead child process
+
+reattach UI
+
+Observability
+Store:
+
+full transcript
+
+parsed events
+
+last coordinator action
+
+current blocker list
+
+repo branch / dirty status
+
+Better than a wiki-only coordination model
+Your wiki idea is good for shared state, but insufficient because agents do not poll.
+
+So the better system is:
+
+Shared state plane
+Use wiki / markdown / sqlite / git repo / event log for durable coordination state.
+
+Push plane
+Use PTY injection to notify the right agent at the right time.
+
+That split is important.
+
+I would actually prefer:
+
+durable coordination state in SQLite or append-only event log
+
+human-readable projected views into markdown/wiki pages
+
+PTY poke mechanism for delivery
+
+Why?
+
+Because once you have structured events like:
+
+FeatureRequested { repo, issue, requested_by }
+
+BugFixed { repo, branch, commit }
+
+ReadyForVerification { repo, target_agent }
+
+then your Rust coordinator can decide who to nudge without scraping wiki prose.
+
+Strong recommendation: use an inbox, not free-form “read the whole wiki”
+Instead of making each agent re-read multiple wiki pages, create a per-agent inbox:
+
+agents/dev-a/inbox/
+agents/qa-a/inbox/
+agents/pm/inbox/
+or DB-backed equivalent.
+
+Then the coordinator injects:
+
+coord inbox
+and the agent reads only targeted requests.
+
+That will reduce cognitive and token overhead.
+
+Pros and cons of the PTY approach
+Benefits
+portable across macOS/Linux
+
+works with ordinary CLI tools
+
+terminal semantics preserved
+
+easy to capture transcripts
+
+lets you automate nudges without window hacks
+
+good foundation for a real multi-agent orchestration system
+
+Risks
+prompt detection can be flaky if you rely on stock shell prompts
+
+concurrent writers must be serialized
+
+parsing terminal output is messy if you need semantic understanding
+
+full-screen TUIs inside the agent PTY make parsing harder
+
+Alternatives
+1. tmux as the transport
+You can spawn each agent in a tmux pane/session and use tmux send-keys.
+
+Pros:
+
+mature
+
+easy to inspect manually
+
+attach/detach already solved
+
+Cons:
+
+external dependency
+
+scripting semantics tied to tmux
+
+less portable in spirit than owning PTYs directly
+
+your coordination logic becomes tmux-centric
+
+This is actually a very good prototype path even if Rust PTY is the long-term path.
+
+2. SSH/control socket/event bus
+Instead of typing into shells, have each agent run a local helper daemon and receive commands over IPC.
+
+Pros:
+
+cleaner than terminal injection
+
+structured protocol
+
+Cons:
+
+only works if the agent tooling cooperates
+
+less general than PTY supervision
+
+more engineering
+
+3. Git/wiki polling only
+You already found the weakness:
+
+nobody gets notified
+
+human remains in loop
+
+My recommended implementation plan
+Phase 1: single-agent PTY proof of concept
+Build:
+
+spawn one agent shell in PTY
+
+show live output
+
+inject commands from keyboard
+
+log transcript
+
+Success criterion:
+
+you can type manually and programmatically into same session, serialized
+
+Phase 2: multi-agent supervisor
+Build:
+
+N PTY sessions
+
+dashboard with state per agent
+
+select active agent
+
+send command to specific agent
+
+Success criterion:
+
+supervisor can safely “poke” blocked agents
+
+Phase 3: readiness + prompt protocol
+Add:
+
+deterministic prompt
+
+command sentinels
+
+idle detection
+
+attach/detach
+
+Success criterion:
+
+no accidental mid-command injection
+
+Phase 4: structured inbox
+Add:
+
+per-agent inbox
+
+coordinator writes requests
+
+agent command coord inbox
+
+ack/status update path
+
+Success criterion:
+
+targeted push instead of wiki re-read spam
+
+Phase 5: dependency-aware nudges
+Add:
+
+DAG of repos/tasks
+
+automatic “unblock successor” nudges
+
+verify-fix / retry-test suggestions
+
+Success criterion:
+
+much less manual “who do I poke now?”
+
+Bottom line
+Yes — this is very implementable in Rust on macOS and Linux.
+
+The right design is:
+
+Rust supervisor owns PTYs
+
+agents run as child processes inside those PTYs
+
+human + coordinator both feed input through a serialized writer
+
+shared wiki/state remains durable context
+
+PTY injection becomes the push-notification mechanism
+
+And for the portability layer, I would start with portable-pty, not raw nix, unless you specifically want Unix-level control from day one. portable-pty is explicitly designed as a cross-platform PTY abstraction and exposes the exact operations you need: open a PTY, spawn a command into it, read from the master, and write to the master. 
+
+If you want, I can turn this into a Rust workspace design with crate boundaries, data types, and a first working MVP skeleton.
+
+
+Okay, I want to start simple.  Basic requirements: the Program Manager tool does this: creates a shell, uses my project management CLI to switch to a particular project (environment) and run Claude Code with a string command to start it in a virtual terminal (may need to configure claude to not be a TUI? or ignore the control sequences? tricky).  Claude will probably ask a question with 1. 2. answer or 1.2.3/4 where additional input can be typed--the PGM tool relays this to me to via a web server SSE to a web ui with a panel per agent.  So several agents can ask me something and I just switch to their Web UI input to respond via the PGM tool.  Now, my current workflow uses files to track what to do next and how to do it.  Normally I would wait until Claude finished the prior task (but I do not have to).  I would hit Ctrl-C and type simply "claude go" and Claude would continue a task or start a new task.  So PGM needs to be able to send Ctrl-C.    Now, the PGM (CLAUDE.md) would give each agent a "push" API to (a) request a feature|fix, or (b) notify completion of a feature|fix.  The PGM would route this to the keyboard of the appropriate target agent (if known) or update the wiki and ask all agents to read the wikipage and respond with additional input, I'm working on it; it is done; I need more info; etc.  Does this make sense?  Everything I type goes through the PGM and everything an agent pushes goes through the PGM (and wiki).  I can also minitor the wiki to see what is happening (and I can look at github to see progress there)
+
+
+Thought for 10s
+Yes — this makes sense, and it is a much better first cut than trying to build a fully autonomous Kanban/wiki-driven swarm up front.
+
+What you are really describing is a PGM broker with three responsibilities:
+
+terminal/session ownership
+
+message routing
+
+human-in-the-loop escalation
+
+That is the right shape.
+
+Restated requirements
+You want a Program Manager process that:
+
+starts and owns one virtual terminal session per agent
+
+launches your project environment switcher, then launches Claude Code inside that session
+
+captures all agent terminal output
+
+forwards important output to a web UI using SSE
+
+lets you type replies back to a selected agent through the PGM
+
+supports Ctrl-C so you can interrupt Claude and then send a follow-up like claude go
+
+routes inter-agent requests through the PGM, either:
+
+directly to a known target agent, or
+
+indirectly through a shared wiki plus broadcast/targeted nudges
+
+keeps you in the loop while removing the need to manually babysit every terminal
+
+That is a solid MVP.
+
+High-level architecture
+1. PGM owns all PTYs
+This is the foundation.
+
+For each agent:
+
+create a PTY
+
+spawn shell into it
+
+run your env/project switch CLI
+
+start Claude Code
+
+continuously read PTY output
+
+continuously allow serialized writes into the PTY
+
+A PTY-backed model is the right fit here, and portable-pty remains a good Rust choice for macOS/Linux PTY ownership. It exposes the exact pieces you need: open a PTY, spawn a command, clone a reader, and take a writer. 
+
+2. Web UI is an observer + input console
+Per agent panel:
+
+agent name / repo / role
+
+current status
+
+last N lines of terminal output
+
+“needs human input” badge
+
+text input box
+
+buttons for:
+
+Send
+
+Ctrl-C
+
+claude go
+
+Read wiki
+
+Ack / Working / Done / Need info
+
+3. PGM is the only path in or out
+That part is especially important.
+
+You said:
+
+Everything I type goes through the PGM and everything an agent pushes goes through the PGM.
+
+That is exactly right.
+
+Do not let agents directly “talk” to each other. Make PGM the router and audit trail.
+
+That gives you:
+
+transcript logging
+
+routing control
+
+future policy enforcement
+
+replayability
+
+observability
+
+What is good about this design
+Benefits
+Human remains in control without micromanaging tabs
+You no longer need to remember which tab wants attention.
+
+Unified transcripts
+Every agent’s interaction can be logged and rendered consistently.
+
+Routing can start simple
+At first, PGM can just:
+
+show you requests
+
+let you decide where to send them
+
+Later it can:
+
+auto-route known requests
+
+auto-broadcast unknown ones
+
+auto-remind blocked agents
+
+Ctrl-C support is natural in PTYs
+Sending Ctrl-C is just writing byte 0x03 to the PTY input stream, as long as the child is attached to a real terminal and still in the foreground process group of that PTY.
+
+The tricky part: Claude Code is a terminal app
+This is the main architectural risk, and it is the right one to call out.
+
+Claude Code documents a real interactive terminal mode with keyboard shortcuts and interactive features, so you should assume it behaves like a normal full-featured terminal application, not just a simple line-oriented stdin/stdout CLI. 
+
+That means:
+
+it may emit ANSI escape sequences
+
+it may redraw the screen
+
+it may use cursor movement
+
+it may render prompts in richer ways than plain line output
+
+So your MVP should assume one of two modes:
+
+Mode A — raw terminal relay
+You treat Claude as a real terminal app.
+
+PGM:
+
+captures raw PTY output
+
+stores it
+
+optionally parses ANSI enough to render a usable view in browser
+
+This is the safest assumption.
+
+Mode B — line-oriented simplification
+If Claude can be configured to behave in a less TUI-like or more script-friendly mode, that would simplify your browser relay a lot.
+
+I did not find, from the official docs I checked, a confirmed “disable TUI entirely” flag that I would rely on yet; the docs I found emphasize interactive mode, CLI flags, and the Agent SDK, but not a simple official “plain no-ANSI mode” guarantee from the material surfaced here. 
+
+So for design purposes, I would not depend on that existing.
+
+Strong recommendation: start by rendering terminal output, not by stripping it
+Because Claude Code is interactive, your first version should avoid trying to semantically understand everything.
+
+Instead:
+
+Browser rendering options
+Option 1 — simplest MVP
+PTY output arrives at server
+
+server sends chunks over SSE
+
+browser shows them in <pre>
+
+crude ANSI stripping on server for readability
+
+Good for:
+
+basic observation
+
+basic questions/answers
+
+minimal engineering
+
+Bad for:
+
+full-screen redraws
+
+prompt fidelity
+
+menus that use cursor movement
+
+Option 2 — better MVP
+keep raw ANSI output
+
+browser uses an xterm-style terminal widget
+
+PGM streams terminal bytes to that widget
+
+This is much closer to how Claude actually behaves.
+
+If you want the web panel to feel faithful, this is the better route.
+
+Recommended MVP behavior
+Agent lifecycle
+For each agent:
+
+spawn shell in PTY
+
+run environment/project switch command
+
+launch Claude Code with your initial prompt
+
+observe output
+
+detect:
+
+asking user a question
+
+idle/waiting state
+
+blocked on dependency
+
+task complete
+
+Human interaction
+When agent asks something:
+
+PGM marks panel as “awaiting input”
+
+SSE pushes event to browser
+
+you type response into that agent panel
+
+PGM writes response + newline into PTY
+
+When you want to interrupt:
+
+press Ctrl-C button
+
+PGM writes 0x03
+
+after prompt stabilizes, PGM can send claude go\n
+
+That is a clean workflow.
+
+Message routing model
+Your “push API” idea also makes sense, but it should be narrowed slightly.
+
+Instead of thinking of it as arbitrary inter-agent chat, think of it as structured requests.
+
+Suggested initial push types
+feature_request
+bug_fix_request
+completion_notice
+blocked_notice
+needs_info
+verification_request
+Each push should include:
+
+source agent
+
+source repo/project
+
+optional target agent
+
+issue/task ID
+
+human-readable summary
+
+optional wiki link
+
+optional priority
+
+Routing rules
+Case 1: target known
+PGM routes to target agent inbox and nudges that agent.
+
+Case 2: target unknown
+PGM:
+
+writes to shared coordination/wiki
+
+optionally broadcasts a “read coordination update” reminder
+
+surfaces it in your UI
+
+Case 3: human review required
+PGM puts it in your inbox and waits for your routing decision
+
+This is better than letting agents free-form message each other.
+
+Important refinement: separate terminal bytes from workflow events
+Do not overuse the PTY stream as your system protocol.
+
+Use two planes:
+
+Plane A — terminal plane
+Raw PTY input/output for Claude interaction.
+
+Plane B — orchestration plane
+Structured JSON events between:
+
+PGM
+
+wiki/coordination store
+
+browser UI
+
+agent-side helper scripts or conventions
+
+This is important because:
+
+PTY bytes are messy
+
+routing decisions should not depend on screen scraping if you can avoid it
+
+a clean event model makes later automation much easier
+
+Suggested state model per agent
+At minimum:
+
+enum AgentState {
+    Starting,
+    Running,
+    AwaitingHumanInput,
+    Busy,
+    Blocked,
+    Idle,
+    CompletedTask,
+    Error,
+    Disconnected,
+}
+And metadata:
+
+struct AgentStatus {
+    agent_id: String,
+    project: String,
+    repo: String,
+    role: String,
+    state: AgentState,
+    last_output_at: Instant,
+    pending_requests: usize,
+    current_task: Option<String>,
+    blocked_on: Vec<String>,
+}
+Does the wiki still make sense?
+Yes, but not as the only coordination mechanism.
+
+Good use of the wiki
+Use it as the durable shared notebook:
+
+overall goal
+
+current blockers
+
+dependency map
+
+“who is working on what”
+
+requests not yet routed
+
+completion summaries
+
+Bad use of the wiki
+Do not rely on agents polling it spontaneously.
+
+So the correct model is:
+
+wiki = durable coordination state
+
+PGM = push notification and routing mechanism
+
+That split is exactly what you were missing before.
+
+Minimal data flow
+From agent to PGM
+terminal output
+
+structured push event, if agent emits one via agreed mechanism
+
+From PGM to UI
+SSE terminal chunks
+
+agent state updates
+
+pending human attention items
+
+From UI to PGM
+text reply
+
+Ctrl-C
+
+canned command (claude go, read wiki, ack, etc.)
+
+From PGM to agent
+raw keystrokes / commands into PTY
+
+optionally instruction to read coordination page
+
+From PGM to wiki/store
+append/update coordination artifacts
+
+Recommended implementation order
+Phase 1 — one agent, one PTY, one web panel
+Goal:
+
+spawn shell
+
+run setup command
+
+start Claude
+
+stream output over SSE
+
+type response back
+
+send Ctrl-C
+
+If this works, the core is validated.
+
+Phase 2 — multiple agents
+Goal:
+
+N PTYs
+
+one panel per agent
+
+independent send / Ctrl-C / status
+
+Phase 3 — explicit attention detection
+Goal:
+
+detect likely questions and “needs input” states
+
+badge the panel in UI
+
+Do not try to make this perfect early on.
+
+Phase 4 — structured push API
+Goal:
+
+add request/completion events
+
+basic routing rules
+
+update coordination wiki/store
+
+Phase 5 — routing automation
+Goal:
+
+known target → direct nudge
+
+unknown target → wiki + broadcast
+
+blocked chains → suggested next poke
+
+Practical cautions
+1. Serialize writes per PTY
+Never let:
+
+human input
+
+auto-routed push
+
+macro commands
+
+write simultaneously.
+
+Use a single writer queue per agent PTY.
+
+2. Ctrl-C timing
+If you send Ctrl-C and immediately send claude go, you may race the shell/app.
+
+Safer sequence:
+
+send Ctrl-C
+
+wait for some output / prompt stabilization
+
+then send claude go
+
+3. Full-screen redraws
+If Claude redraws heavily, plain text SSE may look ugly.
+
+That is okay for a first MVP, but expect to move toward terminal emulation in browser.
+
+4. Do not over-automate routing too early
+First make the system observable and interruptible.
+Then automate.
+
+My recommended concrete MVP
+Server
+Rust:
+
+axum for HTTP + SSE
+
+tokio for async tasks
+
+portable-pty for PTYs
+
+serde for event payloads
+
+tracing for logs
+
+Browser UI
+Simple web app:
+
+grid of agent cards
+
+terminal view per card
+
+input box per card
+
+action buttons:
+
+Send
+
+Ctrl-C
+
+claude go
+
+Mark “needs my attention”
+
+Read wiki
+
+Storage
+Start with files:
+
+transcript logs
+
+JSON state snapshots
+
+your existing wiki files
+
+You can switch to SQLite later.
+
+Bottom line
+Yes, this makes sense.
+
+In fact, this is the right simplification:
+
+PGM owns the terminals
+
+PGM relays agent output to the browser
+
+PGM relays your input back to the agent
+
+PGM is the only router for inter-agent requests
+
+wiki remains durable shared context
+
+Ctrl-C + claude go remains a first-class workflow primitive
+
+The only thing I would change is this:
+
+Do not make wiki-reading the primary push protocol
+Make the primary protocol:
+
+direct PTY nudge when target is known
+
+wiki update as durable context
+
+optional broadcast “read coordination page” only when necessary
+
+That will keep the system much more responsive and much less noisy.
+
+Also, from the current official docs, Claude Code is clearly designed around interactive terminal usage, and the official docs now also expose an Agent SDK and remote-control-related capabilities, which reinforces the idea that a session-owning broker is a sensible direction even if you still start with PTYs first. 
+
+If you want, the next step should be a Rust MVP architecture with crate boundaries, event types, and the exact control flow for:
+
+spawn agent
+
+SSE stream
+
+send text
+
+send Ctrl-C
+
+queue one inter-agent request
+
+
+can you generate a Rust project that does a mini PoC of this.  It would not actually use Claude code, a wiki, or a rest push api.  All it would do is open a terminal, cd to a dir, run a script (that loops, e.g., sleeps 5 seconds,  prints the time). The PGM would send several Ctrl-C commands in a row (since Claude wants 2 to quit, but we could also try /bye , /exit or whatever instead of Ctrl-C but  Ctrl-C is better because Claude might start some slow task and not see /bye for a long time).   
+
+Afte this works, run the PGM to create two ptys, cd to two dirs, run a script in each dir.  The script sleeps, creates a file, prints a message, sleeps.  The PGM checks for the files, (say json) and determines if the other shell is the target and prints the command from the json into the pty of the target.  Two mock-agents, A and B, send each other requests/response this way.  The PGM logs.  After some time PGM sends Ctrl-C,Ctrl-C to each.
+
+
+Thought for 2m 47s
+I generated the PoC Rust project as a downloadable zip:
+
+pgm-poc.zip
+
+It includes:
+
+portable-pty-based PTY ownership
+
+a single mode:
+
+starts one shell in a PTY
+
+cds to a runtime dir
+
+runs a looping shell script
+
+sends multiple Ctrl-C bytes
+
+a duo mode:
+
+starts two PTYs in two dirs
+
+each runs a mock-agent shell script
+
+agent A writes a JSON request
+
+PGM detects it and injects the routed command into agent B’s PTY
+
+agent B later writes a response JSON
+
+PGM routes that back to agent A
+
+logs PTY output and supervisor routing
+
+sends Ctrl-C twice to each agent at shutdown
+
+Files inside:
+
+Cargo.toml
+
+src/main.rs
+
+README.md
+
+One limitation: this environment did not have cargo or rustc, so I could not compile-test it here. The code is written to current portable-pty and Rust 2024-style usage based on the crate docs and examples. portable-pty exposes the PTY operations used here (openpty, spawn_command, try_clone_reader, take_writer), and Axum was not included since you asked to keep this PoC minimal. 
+
+The intended commands are:
+
+cargo run -- single
+cargo run -- duo
+cargo run -- duo 25 /tmp/pgm-poc-demo
+If you want, next I can produce a second version that adds the minimal SSE web dashboard on top of this exact PoC rather than jumping straight to Claude integration.
+
+
+
+
+

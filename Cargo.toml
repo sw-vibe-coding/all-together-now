@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/atn-core",
+    "crates/atn-pty",
+    "crates/atn-server",
+    "crates/atn-ui",
+    "crates/atn-wiki",
+    "crates/atn-trail",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+portable-pty = "0.8"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+async-trait = "0.1"
+wiki-common = { path = "../wiki-rs/shared/wiki-common", features = ["server"] }
+
+# Internal crates
+atn-core = { path = "crates/atn-core" }
+atn-pty = { path = "crates/atn-pty" }
+atn-wiki = { path = "crates/atn-wiki" }
+atn-trail = { path = "crates/atn-trail" }
