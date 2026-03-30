@@ -148,6 +148,23 @@
         .traj-reward-neg { color: #fca5a5; }
         .traj-reward-zero { color: #9ca3af; }
         .saga-none { color: #666; font-size: 14px; padding: 40px; text-align: center; }
+
+        /* Restart button */
+        .btn-restart { background: #1e3a5f; color: #60a5fa; font-size: 11px; padding: 6px 8px; }
+        .btn-restart:hover { background: #264f78; }
+
+        /* Dependency graph */
+        .graph-container { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 8px; }
+        .graph-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px; flex-shrink: 0; }
+        .graph-toolbar h2 { font-size: 16px; color: #c9d1d9; flex: 1; }
+        .graph-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+        .graph-toolbar button:hover { background: #0f3460; }
+        .graph-canvas { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; }
+        .graph-svg { max-width: 100%; max-height: 100%; }
+        .graph-node { cursor: pointer; }
+        .graph-node rect { stroke-width: 2; rx: 8; ry: 8; }
+        .graph-node text { fill: #c9d1d9; font-size: 13px; font-family: system-ui, sans-serif; }
+        .graph-edge { stroke: #e94560; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
     </style>
 </head>
 <body>
@@ -156,6 +173,7 @@
         <span class="agent-count" id="agent-count"></span>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
+            <button class="view-tab" id="tab-graph" onclick="switchView('graph')">Graph</button>
             <button class="view-tab" id="tab-saga" onclick="switchView('saga')">Saga</button>
             <button class="view-tab" id="tab-wiki" onclick="switchView('wiki')">Wiki</button>
             <button class="view-tab" id="tab-events" onclick="switchView('events')">Events</button>
@@ -198,6 +216,14 @@
             <h3>Trajectories (current task type)</h3>
             <div id="saga-traj-list"></div>
         </div>
+    </div>
+
+    <div class="graph-container" id="graph-view" style="display:none;">
+        <div class="graph-toolbar">
+            <h2>Agent Dependency Graph</h2>
+            <button onclick="graphRefresh()">Refresh</button>
+        </div>
+        <div class="graph-canvas" id="graph-canvas"></div>
     </div>
 
     <div class="events-container" id="events-view" style="display:none;">
@@ -259,6 +285,7 @@
                     <input type="text" id="input-${agent.id}" placeholder="Command for ${agent.name}...">
                     <button class="btn-send" data-agent="${agent.id}">Send</button>
                     <button class="btn-ctrl-c" data-agent="${agent.id}">^C</button>
+                    <button class="btn-restart" data-agent="${agent.id}">Restart</button>
                 </div>
             `;
             return panel;
@@ -336,6 +363,28 @@
                 fetch(`${API_BASE}/api/agents/${agentId}/ctrl-c`, { method: 'POST' });
                 input.focus();
             });
+
+            const restartBtn = panel.querySelector('.btn-restart');
+            restartBtn.addEventListener('click', async () => {
+                restartBtn.textContent = 'Restarting...';
+                restartBtn.disabled = true;
+                try {
+                    const res = await fetch(`${API_BASE}/api/agents/${agentId}/restart`, { method: 'POST' });
+                    if (res.ok) {
+                        // Reconnect SSE after a brief delay.
+                        const agent = agents.get(agentId);
+                        if (agent && agent.evtSource) agent.evtSource.close();
+                        agent.term.clear();
+                        setTimeout(() => connectSSE(agentId), 1000);
+                        restartBtn.textContent = 'Restarted';
+                    } else {
+                        restartBtn.textContent = 'Failed';
+                    }
+                } catch (_) {
+                    restartBtn.textContent = 'Error';
+                }
+                setTimeout(() => { restartBtn.textContent = 'Restart'; restartBtn.disabled = false; }, 2000);
+            });
         }
 
         // Poll agent states every 2 seconds
@@ -411,12 +460,14 @@
         // ── View switching ─────────────────────────────────
         function switchView(view) {
             document.getElementById('dashboard').style.display = view === 'agents' ? '' : 'none';
+            document.getElementById('graph-view').style.display = view === 'graph' ? '' : 'none';
             document.getElementById('saga-view').style.display = view === 'saga' ? '' : 'none';
             document.getElementById('wiki-view').style.display = view === 'wiki' ? '' : 'none';
             document.getElementById('events-view').style.display = view === 'events' ? '' : 'none';
-            for (const t of ['agents', 'saga', 'wiki', 'events']) {
+            for (const t of ['agents', 'graph', 'saga', 'wiki', 'events']) {
                 document.getElementById('tab-' + t).className = 'view-tab' + (view === t ? ' active' : '');
             }
+            if (view === 'graph') graphRefresh();
             if (view === 'saga') sagaRefresh();
             if (view === 'wiki') wikiLoadPageList();
             if (view === 'events') eventsRefresh();
@@ -738,6 +789,7 @@
                     if (hasEscalation) {
                         tab.style.borderColor = '#e94560';
                         tab.style.color = '#e94560';
+                        playNotification();
                     }
                     // If events view is active, refresh it
                     if (document.getElementById('events-view').style.display !== 'none') {
@@ -746,6 +798,129 @@
                 }
             } catch (_) {}
         }, 5000);
+
+        // ── Dependency graph ─────────────────────────────────
+        const STATE_COLORS = {
+            starting: '#9ca3af', running: '#34d399', idle: '#60a5fa',
+            awaiting_human_input: '#fbbf24', busy: '#a78bfa', blocked: '#fca5a5',
+            completed_task: '#6ee7b7', error: '#f87171', disconnected: '#6b7280',
+        };
+        const STATE_BG = {
+            starting: '#1f2937', running: '#064e3b', idle: '#1e3a5f',
+            awaiting_human_input: '#78350f', busy: '#4c1d95', blocked: '#7f1d1d',
+            completed_task: '#064e3b', error: '#7f1d1d', disconnected: '#1f2937',
+        };
+
+        async function graphRefresh() {
+            try {
+                const res = await fetch(`${API_BASE}/api/agents/graph`);
+                if (!res.ok) return;
+                const nodes = await res.json();
+                renderGraph(nodes);
+            } catch (_) {}
+        }
+
+        function renderGraph(nodes) {
+            const canvas = document.getElementById('graph-canvas');
+            if (nodes.length === 0) {
+                canvas.innerHTML = '<div style="color:#666;font-size:14px;">No agents running.</div>';
+                return;
+            }
+
+            const nodeW = 180, nodeH = 50, padX = 60, padY = 40;
+            const cols = Math.min(nodes.length, 4);
+            const rows = Math.ceil(nodes.length / cols);
+            const svgW = cols * (nodeW + padX) + padX;
+            const svgH = rows * (nodeH + padY) + padY;
+
+            // Assign positions
+            const positions = {};
+            nodes.forEach((n, i) => {
+                const col = i % cols;
+                const row = Math.floor(i / cols);
+                positions[n.id] = {
+                    x: padX + col * (nodeW + padX),
+                    y: padY + row * (nodeH + padY),
+                };
+            });
+
+            let svg = `<svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">`;
+            svg += `<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560" /></marker></defs>`;
+
+            // Draw edges (blocked_on -> blocker)
+            for (const node of nodes) {
+                const to = positions[node.id];
+                if (!to) continue;
+                for (const dep of node.blocked_on) {
+                    const from = positions[dep];
+                    if (!from) continue;
+                    svg += `<line class="graph-edge" x1="${from.x + nodeW / 2}" y1="${from.y + nodeH}" x2="${to.x + nodeW / 2}" y2="${to.y}" />`;
+                }
+            }
+
+            // Draw nodes
+            for (const node of nodes) {
+                const pos = positions[node.id];
+                const color = STATE_COLORS[node.state] || '#888';
+                const bg = STATE_BG[node.state] || '#16213e';
+                svg += `<g class="graph-node">`;
+                svg += `<rect x="${pos.x}" y="${pos.y}" width="${nodeW}" height="${nodeH}" fill="${bg}" stroke="${color}" />`;
+                svg += `<text x="${pos.x + nodeW / 2}" y="${pos.y + 20}" text-anchor="middle" font-weight="600">${node.name}</text>`;
+                svg += `<text x="${pos.x + nodeW / 2}" y="${pos.y + 38}" text-anchor="middle" font-size="11" fill="${color}">${stateLabel({state: node.state})}</text>`;
+                svg += `</g>`;
+            }
+
+            svg += `</svg>`;
+            canvas.innerHTML = svg;
+        }
+
+        // ── Notification sounds ──────────────────────────────
+        // Use Web Audio API to generate a short attention tone (no external files needed).
+        let audioCtx = null;
+        let notificationsEnabled = true;
+        const prevAgentStates = new Map();
+
+        function playNotification() {
+            if (!notificationsEnabled) return;
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+                osc.frequency.setValueAtTime(660, audioCtx.currentTime + 0.1);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.3);
+            } catch (_) {}
+        }
+
+        // Check for state changes that need attention during polling.
+        const origPollStates = pollStates;
+        pollStates = async function() {
+            try {
+                const res = await fetch(`${API_BASE}/api/agents`);
+                if (!res.ok) return;
+                const list = await res.json();
+                for (const agent of list) {
+                    const sk = stateKey(agent.state);
+                    const badge = document.getElementById(`badge-${agent.id}`);
+                    if (badge) {
+                        badge.className = `state-badge state-${sk}`;
+                        badge.textContent = stateLabel(agent.state);
+                    }
+                    // Play notification on attention-needing state transitions.
+                    const prev = prevAgentStates.get(agent.id);
+                    if (prev && prev !== sk && (sk === 'awaiting_human_input' || sk === 'error' || sk === 'blocked')) {
+                        playNotification();
+                    }
+                    prevAgentStates.set(agent.id, sk);
+                }
+            } catch (_) {}
+        };
     </script>
 </body>
 </html>

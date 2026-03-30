@@ -1,53 +1,77 @@
 # All Together Now — Status
 
-## Current State: Phase 0 Complete, Phase 1 Next
+## Current State: Phase 7 Complete
 
-Agentrail saga initialized with 7 steps (Phases 1-7).
+All 7 original phases implemented. Phase 8 (Session Management UI) pending.
 
 ## What Exists
 
-| Item | Status |
-|------|--------|
-| Research & design exploration | Done — `docs/research.txt` |
-| PRD | Done — `docs/prd.md` |
-| Architecture | Done — `docs/architecture.md` |
-| Detailed design | Done — `docs/design.md` |
-| Implementation plan | Done — `docs/plan.md` |
-| Usage guide | Done — `docs/usage.md` (projected) |
-| CLAUDE.md + agentrail saga | Done — 7 steps defined |
-| Cargo workspace (6 crates) | Done |
-| `atn-core` types | Done — agent, event, inbox, error (6 tests) |
-| `atn-pty` sessions | Done — session, reader, writer (compiles, no integration tests yet) |
-| `atn-wiki` storage | Done — FileWikiStorage + coordination pages (8 tests) |
-| `atn-trail` reader/CLI | Done — saga/step reader + CLI wrapper (4 tests) |
-| `atn-server` HTTP/SSE | Placeholder — compiles and runs |
-| `atn-ui` Yew frontend | Placeholder |
+| Crate | Status | Description |
+|-------|--------|-------------|
+| `atn-core` | Complete | Domain types: agent, event, inbox, error, config, router |
+| `atn-pty` | Complete | PTY session management, reader, writer, state tracker, transcript |
+| `atn-server` | Complete | Axum HTTP/SSE server with all REST endpoints |
+| `atn-wiki` | Complete | FileWikiStorage + coordination page seeding |
+| `atn-trail` | Complete | Agentrail file reader + CLI wrapper |
+| `atn-ui` | Placeholder | Yew frontend (server uses embedded static HTML) |
 
-**Tests**: 18 passing, 0 failing. Zero clippy warnings.
+## Phase Summary
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 0 | Project skeleton, workspace, core types | Done |
+| 1 | Single agent PTY with integration tests | Done |
+| 2 | Minimal web UI with xterm.js + SSE | Done |
+| 3 | Multi-agent management with dashboard grid | Done |
+| 4 | Wiki integration with REST API + CAS | Done |
+| 5 | Message routing with outbox polling | Done |
+| 6 | Agentrail integration with saga UI | Done |
+| 7 | Polish: shutdown, restart, graph, notifications, hot-reload, docs | Done |
+| 8 | Session management UI (create/stop agents from browser) | Pending |
+
+## Phase 7 Deliverables
+
+| Feature | Implementation |
+|---------|---------------|
+| Graceful shutdown | SIGINT/SIGTERM handler, double Ctrl-C + kill per agent |
+| Session restart | POST `/api/agents/{id}/restart` + UI button |
+| Dependency graph | GET `/api/agents/graph` + SVG visualization in Graph tab |
+| Notification sounds | Web Audio API tones on attention states and escalations |
+| Config hot-reload | File watcher on agents.toml, auto add/remove agents |
+| Error handling | Panic hook, structured tracing, improved logging |
+| Documentation | Updated usage.md and status.md |
+
+## Architecture
+
+Cargo workspace with 6 crates (library-first design):
+- **atn-core**: pure domain types, no async, no I/O
+- **atn-pty**: PTY session lifecycle via portable-pty + tokio
+- **atn-server**: Axum binary with REST + SSE + embedded static UI
+- **atn-wiki**: wiki storage and coordination logic
+- **atn-trail**: agentrail file reader and CLI wrapper
+- **atn-ui**: Yew components (placeholder for future WASM frontend)
+
+## Key Technical Details
+
+- **Terminal plane**: raw PTY bytes streamed via SSE (base64 encoded)
+- **Orchestration plane**: structured JSON events via REST API
+- **State tracking**: automated via PTY output pattern matching (prompt markers, question markers, idle timeout)
+- **Message routing**: file-based outbox/inbox with background polling (2s interval)
+- **Wiki**: ETag-based CAS for conflict resolution
+- **Config**: TOML-based, watched for changes via notify crate
 
 ## Upstream Projects
 
 ### agentrail-rs
 **Location**: `~/github/sw-vibe-coding/agentrail-rs`
-**Status**: Phases 0-5 complete. 13 CLI commands, 41 integration tests.
-**Integration**: CLI binary in PATH, invoked by `atn-trail/src/cli.rs`.
+**Integration**: CLI binary in PATH, invoked by `atn-trail/src/cli.rs`
 
 ### wiki-rs
 **Location**: `~/github/sw-vibe-coding/wiki-rs`
-**Status**: Production-quality. 6 backends, CAS, PATCH API, 80+ tests.
-**Integration**: `wiki-common` crate used as path dependency (with `server` feature).
+**Integration**: `wiki-common` crate used as path dependency (with `server` feature)
 
-## Decisions Made
+## Quality
 
-| Decision | Rationale |
-|----------|-----------|
-| Yew for primary UI | Consistent with wiki-rs; Rust-only stack |
-| Library-first design | Enables future CLI, TUI, Emacs frontends |
-| `portable-pty` for PTY | Cross-platform (macOS + Linux) |
-| Axum for server | Consistent with wiki-rs; good SSE support |
-| File-based wiki (MVP) | Simplest backend; swap later via trait |
-| Serialized writer per PTY | Prevents input corruption |
-| Outbox/inbox file routing | Agent writes to outbox, PGM routes to target inbox + PTY poke |
-| Agentrail as CLI binary | Avoids library version conflicts; reads files directly for data |
-| wiki-common as dependency | Reuse WikiPage, storage traits, parser, etag, patch |
-| ATN owns its wiki impl | CAS and coordination logic in atn-wiki, not added to wiki-rs |
+- Zero clippy warnings (`cargo clippy --workspace -- -D warnings`)
+- All tests passing (`cargo test --workspace`)
+- Rust 2024 edition throughout

@@ -53,7 +53,7 @@ async fn spawn_and_echo() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(tmp.path());
 
-    let mut session = PtySession::spawn(&config, None).await.unwrap();
+    let mut session = PtySession::spawn(&config, None).unwrap();
     let rx = session.output_receiver();
 
     // Wait for bash to initialize.
@@ -81,7 +81,7 @@ async fn ctrl_c_interrupt() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(tmp.path());
 
-    let mut session = PtySession::spawn(&config, None).await.unwrap();
+    let mut session = PtySession::spawn(&config, None).unwrap();
     let rx = session.output_receiver();
 
     // Wait for bash to initialize.
@@ -116,7 +116,7 @@ async fn shutdown_clean() {
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(tmp.path());
 
-    let mut session = PtySession::spawn(&config, None).await.unwrap();
+    let mut session = PtySession::spawn(&config, None).unwrap();
 
     // Wait for bash to initialize.
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -150,7 +150,6 @@ async fn transcript_logging() {
     let config = test_config(tmp.path());
 
     let mut session = PtySession::spawn(&config, Some(log_dir.clone()))
-        .await
         .unwrap();
 
     // Wait for bash to initialize.
@@ -204,7 +203,7 @@ async fn session_manager_lifecycle() {
         launch_command: String::new(),
     };
 
-    let id = mgr.spawn_agent(config).await.unwrap();
+    let id = mgr.spawn_agent(config).unwrap();
     assert_eq!(mgr.len(), 1);
     assert!(mgr.get_session(&id).is_ok());
 

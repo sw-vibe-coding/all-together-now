@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 
 use std::collections::HashMap;
 
-use atn_core::agent::{AgentId, AgentState};
+use atn_core::agent::{AgentConfig, AgentId, AgentState};
 use atn_core::config::load_project_config;
 use atn_core::event::{InputEvent, OutputSignal, PushEvent};
 use atn_core::router::EventLogEntry;
@@ -38,7 +38,9 @@ struct SharedState {
     wiki: Arc<FileWikiStorage>,
     event_log: router::EventLog,
     /// Resolved repo_path for each agent (for saga lookups).
-    agent_repo_paths: Arc<HashMap<String, PathBuf>>,
+    agent_repo_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Agent configs for restart support.
+    agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
 }
 
 type AppState = SharedState;
@@ -109,9 +111,21 @@ struct DistillBody {
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive("atn=info".parse().unwrap()),
+            EnvFilter::from_default_env()
+                .add_directive("atn=info".parse().unwrap())
+                .add_directive("atn_server=info".parse().unwrap())
+                .add_directive("atn_pty=info".parse().unwrap()),
         )
+        .with_target(true)
+        .with_thread_ids(false)
         .init();
+
+    // Install a panic hook that logs panics via tracing before aborting.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("PANIC: {info}");
+        default_hook(info);
+    }));
 
     tracing::info!("All Together Now — PGM server starting");
 
@@ -137,14 +151,17 @@ async fn main() {
     let log_dir = project_config
         .project
         .log_dir
+        .as_ref()
         .map(|d| base_dir.join(d));
 
     let mut manager = SessionManager::new(log_dir);
 
-    // Spawn all configured agents.
+    // Build agent configs and spawn sessions.
+    let mut agent_configs_map: HashMap<String, AgentConfig> = HashMap::new();
     for entry in &project_config.agents {
         let config = entry.to_agent_config(&base_dir);
-        match manager.spawn_agent(config).await {
+        agent_configs_map.insert(entry.id.clone(), config.clone());
+        match manager.spawn_agent(config) {
             Ok(id) => tracing::info!("Spawned agent: {id} ({})", entry.name),
             Err(e) => tracing::error!("Failed to spawn agent '{}': {e}", entry.id),
         }
@@ -153,15 +170,10 @@ async fn main() {
     let agent_ids: Vec<String> = manager.agent_ids().iter().map(|id| id.0.clone()).collect();
 
     // Build repo_path map for saga lookups.
-    let agent_repo_paths: HashMap<String, PathBuf> = project_config
-        .agents
+    let agent_repo_paths: HashMap<String, PathBuf> = agent_configs_map
         .iter()
-        .map(|entry| {
-            let config = entry.to_agent_config(&base_dir);
-            (entry.id.clone(), config.repo_path)
-        })
+        .map(|(id, config)| (id.clone(), config.repo_path.clone()))
         .collect();
-    let agent_repo_paths = Arc::new(agent_repo_paths);
 
     tracing::info!(
         "{} agent(s) running",
@@ -181,7 +193,7 @@ async fn main() {
     let manager = Arc::new(Mutex::new(manager));
 
     let _router_handle = router::spawn_message_router(
-        base_dir,
+        base_dir.clone(),
         manager.clone(),
         wiki.clone(),
         event_log.clone(),
@@ -190,11 +202,15 @@ async fn main() {
     tracing::info!("Message router started (polling every 2s)");
 
     let state = SharedState {
-        manager,
+        manager: manager.clone(),
         wiki,
         event_log,
-        agent_repo_paths,
+        agent_repo_paths: Arc::new(Mutex::new(agent_repo_paths)),
+        agent_configs: Arc::new(Mutex::new(agent_configs_map)),
     };
+
+    // Spawn config hot-reload watcher.
+    spawn_config_watcher(config_path, base_dir, state.clone());
 
     let app = Router::new()
         .route("/", get(index_handler))
@@ -203,6 +219,8 @@ async fn main() {
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
         .route("/api/agents/{id}/state", get(agent_state))
+        .route("/api/agents/{id}/restart", post(agent_restart))
+        .route("/api/agents/graph", get(agent_dependency_graph))
         .route("/api/saga", get(get_project_saga))
         .route("/api/saga/distill", post(saga_distill))
         .route("/api/agents/{id}/saga", get(get_agent_saga))
@@ -216,12 +234,53 @@ async fn main() {
                 .delete(wiki_delete_page),
         )
         .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state.clone());
 
     let addr = "0.0.0.0:7500";
     tracing::info!("Listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    let manager_for_shutdown = state.manager.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .unwrap();
+
+    // Server has stopped accepting — now clean up agent sessions.
+    tracing::info!("Shutting down all agent sessions...");
+    let sessions = {
+        let mut mgr = manager_for_shutdown.lock().await;
+        mgr.drain_all()
+    };
+    for mut session in sessions {
+        let _ = session.shutdown().await;
+    }
+    tracing::info!("All agents shut down. Goodbye.");
+}
+
+/// Wait for SIGINT (Ctrl-C) or SIGTERM.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("Received Ctrl-C, starting graceful shutdown"),
+        () = terminate => tracing::info!("Received SIGTERM, starting graceful shutdown"),
+    }
 }
 
 async fn index_handler() -> Html<&'static str> {
@@ -350,6 +409,212 @@ async fn agent_ctrl_c(
     Ok(StatusCode::OK)
 }
 
+// ── Restart / graph / hot-reload ──────────────────────────────────────
+
+/// Restart an agent session: shut down if running, then re-spawn from stored config.
+async fn agent_restart(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id.clone());
+
+    // Get the config for this agent.
+    let config = {
+        let configs = state.agent_configs.lock().await;
+        configs.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    // Remove the existing session (if any) without holding the lock across await.
+    let old_session = {
+        let mut mgr = state.manager.lock().await;
+        mgr.remove_agent(&agent_id).ok()
+    };
+    if let Some(mut session) = old_session {
+        let _ = session.shutdown().await;
+    }
+
+    // Re-spawn from stored config.
+    {
+        let mut mgr = state.manager.lock().await;
+        mgr.spawn_agent(config)
+            .map_err(|e| {
+                tracing::error!("Failed to restart agent '{id}': {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
+
+    tracing::info!("Restarted agent: {id}");
+    Ok(StatusCode::OK)
+}
+
+/// Dependency graph: which agents are blocked and by what.
+#[derive(Serialize)]
+struct DepGraphNode {
+    id: String,
+    name: String,
+    state: String,
+    blocked_on: Vec<String>,
+}
+
+async fn agent_dependency_graph(
+    State(state): State<AppState>,
+) -> Json<Vec<DepGraphNode>> {
+    let pending: Vec<_> = {
+        let mgr = state.manager.lock().await;
+        mgr.agent_ids()
+            .iter()
+            .filter_map(|id| {
+                mgr.get_session(id).ok().map(|session| {
+                    (
+                        id.0.clone(),
+                        session.name().to_string(),
+                        session.state(),
+                    )
+                })
+            })
+            .collect()
+    };
+
+    let mut nodes = Vec::with_capacity(pending.len());
+    for (id, name, state_lock) in pending {
+        let s = state_lock.read().await;
+        let blocked_on = match &*s {
+            AgentState::Blocked { on } => on.clone(),
+            _ => vec![],
+        };
+        let state_key = serde_json::to_value(&*s)
+            .ok()
+            .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(String::from))
+            .unwrap_or_else(|| "unknown".to_string());
+        nodes.push(DepGraphNode {
+            id,
+            name,
+            state: state_key,
+            blocked_on,
+        });
+    }
+
+    Json(nodes)
+}
+
+/// Watch agents.toml for changes and hot-reload agent configuration.
+fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedState) {
+    use notify::{EventKind, RecursiveMode, Watcher};
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+
+    // Spawn the blocking file watcher in a dedicated thread.
+    std::thread::spawn(move || {
+        let tx = tx;
+        let mut watcher = match notify::recommended_watcher(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res
+                    && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
+                {
+                    let _ = tx.blocking_send(());
+                }
+            },
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!("Failed to create config file watcher: {e}");
+                return;
+            }
+        };
+        if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
+            tracing::error!("Failed to watch {}: {e}", config_path.display());
+            return;
+        }
+        tracing::info!("Watching {} for changes", config_path.display());
+        // Keep watcher alive.
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        }
+    });
+
+    // Process reload signals on the async runtime.
+    // We use LocalSet-free approach: collect decisions without holding manager lock,
+    // then apply them.
+    let manager = state.manager.clone();
+    let agent_configs = state.agent_configs.clone();
+    let agent_repo_paths = state.agent_repo_paths.clone();
+
+    tokio::spawn(async move {
+        // Debounce: wait 500ms after last event before reloading.
+        while rx.recv().await.is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            while rx.try_recv().is_ok() {}
+
+            let config_path_for_load = base_dir.join(DEFAULT_CONFIG_PATH);
+            tracing::info!("Config file changed, reloading...");
+
+            let new_config = match load_project_config(&config_path_for_load) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to reload config: {e}");
+                    continue;
+                }
+            };
+
+            let new_ids: std::collections::HashSet<String> =
+                new_config.agents.iter().map(|a| a.id.clone()).collect();
+            let current_ids: std::collections::HashSet<String> = {
+                let mgr = manager.lock().await;
+                mgr.agent_ids().iter().map(|id| id.0.clone()).collect()
+            };
+
+            // Remove agents no longer in config.
+            let to_remove: Vec<String> = current_ids.difference(&new_ids).cloned().collect();
+            for id in &to_remove {
+                let agent_id = AgentId(id.clone());
+                let old_session = {
+                    let mut mgr = manager.lock().await;
+                    mgr.remove_agent(&agent_id).ok()
+                };
+                if let Some(mut session) = old_session {
+                    if let Err(e) = session.shutdown().await {
+                        tracing::warn!("Hot-reload: error shutting down agent '{id}': {e}");
+                    }
+                    tracing::info!("Hot-reload: removed agent '{id}'");
+                }
+            }
+
+            // Add new agents or update configs.
+            let to_add: Vec<_> = new_config
+                .agents
+                .iter()
+                .filter(|entry| !current_ids.contains(&entry.id))
+                .cloned()
+                .collect();
+
+            // Update all configs and repo paths.
+            {
+                let mut configs = agent_configs.lock().await;
+                let mut repo_paths = agent_repo_paths.lock().await;
+                for entry in &new_config.agents {
+                    let config = entry.to_agent_config(&base_dir);
+                    repo_paths.insert(entry.id.clone(), config.repo_path.clone());
+                    configs.insert(entry.id.clone(), config);
+                }
+            }
+
+            // Spawn newly added agents.
+            // Each spawn_agent call is done in a scope that drops the lock before the next.
+            for entry in &to_add {
+                let config = entry.to_agent_config(&base_dir);
+                let id = entry.id.clone();
+                let result = manager.lock().await.spawn_agent(config);
+                match result {
+                    Ok(_) => tracing::info!("Hot-reload: added agent '{id}'"),
+                    Err(e) => {
+                        tracing::error!("Hot-reload: failed to spawn agent '{id}': {e}");
+                    }
+                }
+            }
+        }
+    });
+}
+
 // ── Saga / Agentrail handlers ─────────────────────────────────────────
 
 /// Build a SagaResponse from a repo path (blocking I/O in spawn_blocking).
@@ -395,11 +660,12 @@ async fn get_agent_saga(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<SagaResponse>, StatusCode> {
-    let repo_path = state
-        .agent_repo_paths
+    let repo_paths = state.agent_repo_paths.lock().await;
+    let repo_path = repo_paths
         .get(&id)
         .ok_or(StatusCode::NOT_FOUND)?
         .clone();
+    drop(repo_paths);
     Ok(Json(saga_for_path(repo_path).await))
 }
 

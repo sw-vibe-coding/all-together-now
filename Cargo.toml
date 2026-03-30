@@ -31,6 +31,7 @@ async-trait = "0.1"
 base64 = "0.22"
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-core = "0.3"
+notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 wiki-common = { path = "../wiki-rs/shared/wiki-common", features = ["server"] }
 
 # Internal crates

@@ -25,9 +25,9 @@ impl SessionManager {
     }
 
     /// Spawn a new agent session and return its ID.
-    pub async fn spawn_agent(&mut self, config: AgentConfig) -> Result<AgentId> {
+    pub fn spawn_agent(&mut self, config: AgentConfig) -> Result<AgentId> {
         let id = config.id.clone();
-        let session = PtySession::spawn(&config, self.log_dir.clone()).await?;
+        let session = PtySession::spawn(&config, self.log_dir.clone())?;
         self.sessions.insert(id.clone(), session);
         Ok(id)
     }
@@ -46,22 +46,29 @@ impl SessionManager {
             .ok_or_else(|| AtnError::AgentNotFound(id.clone()))
     }
 
+    /// Remove a specific agent session from management, returning it for shutdown.
+    pub fn remove_agent(&mut self, id: &AgentId) -> Result<PtySession> {
+        self.sessions
+            .remove(id)
+            .ok_or_else(|| AtnError::AgentNotFound(id.clone()))
+    }
+
     /// Shut down a specific agent session and remove it from management.
     pub async fn shutdown_agent(&mut self, id: &AgentId) -> Result<()> {
-        let mut session = self
-            .sessions
-            .remove(id)
-            .ok_or_else(|| AtnError::AgentNotFound(id.clone()))?;
+        let mut session = self.remove_agent(id)?;
         session.shutdown().await
+    }
+
+    /// Remove all agent sessions, returning them for shutdown.
+    pub fn drain_all(&mut self) -> Vec<PtySession> {
+        self.sessions.drain().map(|(_, s)| s).collect()
     }
 
     /// Shut down all agent sessions.
     pub async fn shutdown_all(&mut self) -> Result<()> {
-        let ids: Vec<AgentId> = self.sessions.keys().cloned().collect();
-        for id in ids {
-            if let Some(mut session) = self.sessions.remove(&id) {
-                let _ = session.shutdown().await;
-            }
+        let sessions = self.drain_all();
+        for mut session in sessions {
+            let _ = session.shutdown().await;
         }
         Ok(())
     }

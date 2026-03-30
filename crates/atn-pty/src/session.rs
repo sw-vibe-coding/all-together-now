@@ -39,7 +39,7 @@ impl PtySession {
     ///
     /// If `log_dir` is provided, transcript and event logs are written to
     /// `{log_dir}/{agent_id}/`.
-    pub async fn spawn(config: &AgentConfig, log_dir: Option<PathBuf>) -> Result<Self> {
+    pub fn spawn(config: &AgentConfig, log_dir: Option<PathBuf>) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -192,12 +192,12 @@ impl PtySession {
     ///
     /// Sends Ctrl-C twice (1s apart), waits for exit, then kills if needed.
     pub async fn shutdown(&mut self) -> Result<()> {
-        // First Ctrl-C
-        let _ = self.send_ctrl_c().await;
+        // First Ctrl-C (send directly through channel to avoid &self borrow).
+        let _ = self.input_tx.send(InputEvent::RawBytes { bytes: vec![0x03] }).await;
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         // Second Ctrl-C
-        let _ = self.send_ctrl_c().await;
+        let _ = self.input_tx.send(InputEvent::RawBytes { bytes: vec![0x03] }).await;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         // Try to kill the child process.
