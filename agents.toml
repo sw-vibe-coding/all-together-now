@@ -1,0 +1,24 @@
+[project]
+name = "all-together-now"
+log_dir = ".atn/logs"
+
+[[agent]]
+id = "alice"
+name = "Alice (Frontend)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"
+
+[[agent]]
+id = "bob"
+name = "Bob (Backend)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"
+
+[[agent]]
+id = "carol"
+name = "Carol (QA)"
+repo_path = "."
+role = "qa"
+launch_command = "bash"

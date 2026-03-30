@@ -9,6 +9,7 @@ use atn_core::error::{AtnError, Result};
 use atn_core::event::{InputEvent, OutputSignal};
 
 use crate::reader::spawn_reader_task;
+use crate::state_tracker::spawn_state_tracker;
 use crate::transcript::TranscriptWriter;
 use crate::writer::spawn_writer_task;
 
@@ -20,6 +21,8 @@ const INPUT_CHANNEL_CAPACITY: usize = 64;
 /// A managed PTY session for one agent.
 pub struct PtySession {
     agent_id: AgentId,
+    agent_name: String,
+    agent_role: String,
     child: Box<dyn portable_pty::Child + Send>,
     input_tx: mpsc::Sender<InputEvent>,
     output_tx: broadcast::Sender<OutputSignal>,
@@ -28,6 +31,7 @@ pub struct PtySession {
     _reader_handle: tokio::task::JoinHandle<()>,
     _writer_handle: tokio::task::JoinHandle<()>,
     _transcript_handle: Option<tokio::task::JoinHandle<()>>,
+    _state_tracker_handle: tokio::task::JoinHandle<()>,
 }
 
 impl PtySession {
@@ -85,6 +89,10 @@ impl PtySession {
             None
         };
 
+        // Start the state tracker.
+        let state_tracker_rx = output_tx.subscribe();
+        let state_tracker_handle = spawn_state_tracker(state_tracker_rx, state.clone());
+
         // Inject setup commands.
         let setup_tx = input_tx.clone();
         let setup_commands = config.setup_commands.clone();
@@ -120,6 +128,8 @@ impl PtySession {
 
         Ok(Self {
             agent_id: config.id.clone(),
+            agent_name: config.name.clone(),
+            agent_role: format!("{:?}", config.role).to_lowercase(),
             child,
             input_tx,
             output_tx,
@@ -128,12 +138,23 @@ impl PtySession {
             _reader_handle: reader_handle,
             _writer_handle: writer_handle,
             _transcript_handle: transcript_handle,
+            _state_tracker_handle: state_tracker_handle,
         })
     }
 
     /// The agent ID for this session.
     pub fn agent_id(&self) -> &AgentId {
         &self.agent_id
+    }
+
+    /// The agent's display name.
+    pub fn name(&self) -> &str {
+        &self.agent_name
+    }
+
+    /// The agent's role as a lowercase string.
+    pub fn role(&self) -> &str {
+        &self.agent_role
     }
 
     /// Get a clone of the input sender for this session.

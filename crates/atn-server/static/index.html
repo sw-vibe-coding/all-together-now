@@ -8,133 +8,233 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
-        header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 12px; }
+        header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         header h1 { font-size: 18px; font-weight: 600; color: #e94560; }
-        header .agent-label { font-size: 14px; color: #aaa; }
-        header .status { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #0f3460; color: #4ecca3; }
-        .panel { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 8px; min-height: 0; }
-        #terminal-container { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; background: #000; }
-        .controls { display: flex; gap: 8px; align-items: center; }
-        .controls input { flex: 1; padding: 8px 12px; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 14px; outline: none; }
-        .controls input:focus { border-color: #e94560; }
-        .controls button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        header .agent-count { font-size: 13px; color: #888; }
+
+        .dashboard { flex: 1; display: grid; gap: 8px; padding: 8px; min-height: 0; overflow: auto; }
+        .dashboard.cols-1 { grid-template-columns: 1fr; }
+        .dashboard.cols-2 { grid-template-columns: 1fr 1fr; }
+        .dashboard.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+        .agent-panel { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; min-height: 300px; overflow: hidden; }
+        .agent-header { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+        .agent-header .agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; }
+        .agent-header .agent-role { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .agent-header .spacer { flex: 1; }
+
+        .state-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
+        .state-starting    { background: #1f2937; color: #9ca3af; }
+        .state-running     { background: #064e3b; color: #34d399; }
+        .state-idle        { background: #1e3a5f; color: #60a5fa; }
+        .state-awaiting_human_input { background: #78350f; color: #fbbf24; }
+        .state-busy        { background: #4c1d95; color: #a78bfa; }
+        .state-blocked     { background: #7f1d1d; color: #fca5a5; }
+        .state-completed_task { background: #064e3b; color: #6ee7b7; }
+        .state-error       { background: #7f1d1d; color: #f87171; }
+        .state-disconnected { background: #1f2937; color: #6b7280; }
+
+        .agent-terminal { flex: 1; min-height: 0; background: #0d1117; }
+        .agent-controls { display: flex; gap: 6px; padding: 6px 8px; align-items: center; border-top: 1px solid #0f3460; flex-shrink: 0; }
+        .agent-controls input { flex: 1; padding: 6px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 13px; outline: none; }
+        .agent-controls input:focus { border-color: #e94560; }
+        .agent-controls button { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
         .btn-send { background: #4ecca3; color: #1a1a2e; }
         .btn-send:hover { background: #3db892; }
-        .btn-ctrl-c { background: #e94560; color: #fff; }
+        .btn-ctrl-c { background: #e94560; color: #fff; font-size: 11px; padding: 6px 8px; }
         .btn-ctrl-c:hover { background: #d63851; }
+
+        .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .conn-dot.connected { background: #4ecca3; }
+        .conn-dot.disconnected { background: #e94560; }
     </style>
 </head>
 <body>
     <header>
         <h1>All Together Now</h1>
-        <span class="agent-label" id="agent-name">demo</span>
-        <span class="status" id="agent-status">connecting...</span>
+        <span class="agent-count" id="agent-count"></span>
     </header>
-    <div class="panel">
-        <div id="terminal-container"></div>
-        <div class="controls">
-            <input type="text" id="input-box" placeholder="Type a command..." autofocus>
-            <button class="btn-send" id="btn-send">Send</button>
-            <button class="btn-ctrl-c" id="btn-ctrl-c">Ctrl-C</button>
-        </div>
-    </div>
+    <div class="dashboard" id="dashboard"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script>
-        const AGENT_ID = 'demo';
         const API_BASE = '';
+        const agents = new Map(); // id -> { term, fitAddon, evtSource, panel }
 
-        // Initialize xterm.js
-        const term = new Terminal({
-            cursorBlink: true,
-            fontSize: 14,
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-            theme: {
-                background: '#0d1117',
-                foreground: '#c9d1d9',
-                cursor: '#e94560',
-                selectionBackground: '#264f78',
-            },
-        });
-        const fitAddon = new FitAddon.FitAddon();
-        term.loadAddon(fitAddon);
+        const STATE_LABELS = {
+            starting: 'Starting',
+            running: 'Running',
+            idle: 'Idle',
+            awaiting_human_input: 'Awaiting Input',
+            busy: 'Busy',
+            blocked: 'Blocked',
+            completed_task: 'Completed',
+            error: 'Error',
+            disconnected: 'Disconnected',
+        };
 
-        const container = document.getElementById('terminal-container');
-        term.open(container);
-        fitAddon.fit();
+        function stateKey(stateObj) {
+            if (typeof stateObj === 'string') return stateObj;
+            if (stateObj && stateObj.state) return stateObj.state;
+            return 'starting';
+        }
 
-        window.addEventListener('resize', () => fitAddon.fit());
-        new ResizeObserver(() => fitAddon.fit()).observe(container);
+        function stateLabel(stateObj) {
+            const key = stateKey(stateObj);
+            return STATE_LABELS[key] || key;
+        }
 
-        // SSE connection for terminal output
-        function connectSSE() {
-            const status = document.getElementById('agent-status');
-            const evtSource = new EventSource(`${API_BASE}/api/agents/${AGENT_ID}/sse`);
+        function createAgentPanel(agent) {
+            const panel = document.createElement('div');
+            panel.className = 'agent-panel';
+            panel.id = `panel-${agent.id}`;
+
+            const sk = stateKey(agent.state);
+
+            panel.innerHTML = `
+                <div class="agent-header">
+                    <span class="agent-name">${agent.name}</span>
+                    <span class="agent-role">${agent.role}</span>
+                    <span class="spacer"></span>
+                    <span class="conn-dot disconnected" id="conn-${agent.id}"></span>
+                    <span class="state-badge state-${sk}" id="badge-${agent.id}">${stateLabel(agent.state)}</span>
+                </div>
+                <div class="agent-terminal" id="term-${agent.id}"></div>
+                <div class="agent-controls">
+                    <input type="text" id="input-${agent.id}" placeholder="Command for ${agent.name}...">
+                    <button class="btn-send" data-agent="${agent.id}">Send</button>
+                    <button class="btn-ctrl-c" data-agent="${agent.id}">^C</button>
+                </div>
+            `;
+            return panel;
+        }
+
+        function initTerminal(agentId) {
+            const term = new Terminal({
+                cursorBlink: true,
+                fontSize: 13,
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+                theme: {
+                    background: '#0d1117',
+                    foreground: '#c9d1d9',
+                    cursor: '#e94560',
+                    selectionBackground: '#264f78',
+                },
+            });
+            const fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+
+            const container = document.getElementById(`term-${agentId}`);
+            term.open(container);
+            fitAddon.fit();
+            return { term, fitAddon };
+        }
+
+        function connectSSE(agentId) {
+            const connDot = document.getElementById(`conn-${agentId}`);
+            const evtSource = new EventSource(`${API_BASE}/api/agents/${agentId}/sse`);
+            const agent = agents.get(agentId);
 
             evtSource.onopen = () => {
-                status.textContent = 'connected';
-                status.style.color = '#4ecca3';
+                connDot.className = 'conn-dot connected';
             };
 
             evtSource.onmessage = (event) => {
                 const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
-                term.write(bytes);
+                agent.term.write(bytes);
             };
 
             evtSource.onerror = () => {
-                status.textContent = 'disconnected';
-                status.style.color = '#e94560';
+                connDot.className = 'conn-dot disconnected';
                 evtSource.close();
-                setTimeout(connectSSE, 2000);
+                setTimeout(() => connectSSE(agentId), 2000);
             };
-        }
-        connectSSE();
 
-        // Send input
-        async function sendInput(text) {
-            await fetch(`${API_BASE}/api/agents/${AGENT_ID}/input`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text }),
-            });
+            agent.evtSource = evtSource;
         }
 
-        // Send Ctrl-C
-        async function sendCtrlC() {
-            await fetch(`${API_BASE}/api/agents/${AGENT_ID}/ctrl-c`, {
-                method: 'POST',
-            });
-        }
+        function setupControls(agentId) {
+            const input = document.getElementById(`input-${agentId}`);
+            const panel = document.getElementById(`panel-${agentId}`);
+            const sendBtn = panel.querySelector('.btn-send');
+            const ctrlcBtn = panel.querySelector('.btn-ctrl-c');
 
-        // UI event handlers
-        const inputBox = document.getElementById('input-box');
-        const btnSend = document.getElementById('btn-send');
-        const btnCtrlC = document.getElementById('btn-ctrl-c');
-
-        btnSend.addEventListener('click', () => {
-            const text = inputBox.value;
-            if (text) {
-                sendInput(text);
-                inputBox.value = '';
-            }
-            inputBox.focus();
-        });
-
-        inputBox.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                const text = inputBox.value;
+            function doSend() {
+                const text = input.value;
                 if (text) {
-                    sendInput(text);
-                    inputBox.value = '';
+                    fetch(`${API_BASE}/api/agents/${agentId}/input`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text }),
+                    });
+                    input.value = '';
                 }
+                input.focus();
             }
-        });
 
-        btnCtrlC.addEventListener('click', () => {
-            sendCtrlC();
-            inputBox.focus();
-        });
+            sendBtn.addEventListener('click', doSend);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') doSend();
+            });
+
+            ctrlcBtn.addEventListener('click', () => {
+                fetch(`${API_BASE}/api/agents/${agentId}/ctrl-c`, { method: 'POST' });
+                input.focus();
+            });
+        }
+
+        // Poll agent states every 2 seconds
+        async function pollStates() {
+            try {
+                const res = await fetch(`${API_BASE}/api/agents`);
+                if (!res.ok) return;
+                const list = await res.json();
+                for (const agent of list) {
+                    const badge = document.getElementById(`badge-${agent.id}`);
+                    if (badge) {
+                        const sk = stateKey(agent.state);
+                        badge.className = `state-badge state-${sk}`;
+                        badge.textContent = stateLabel(agent.state);
+                    }
+                }
+            } catch (_) { /* ignore */ }
+        }
+
+        async function init() {
+            const res = await fetch(`${API_BASE}/api/agents`);
+            const agentList = await res.json();
+
+            const dashboard = document.getElementById('dashboard');
+            const count = agentList.length;
+            document.getElementById('agent-count').textContent = `${count} agent${count !== 1 ? 's' : ''}`;
+
+            // Choose grid columns based on agent count
+            if (count <= 1) dashboard.className = 'dashboard cols-1';
+            else if (count <= 2) dashboard.className = 'dashboard cols-2';
+            else dashboard.className = 'dashboard cols-3';
+
+            for (const agent of agentList) {
+                const panel = createAgentPanel(agent);
+                dashboard.appendChild(panel);
+
+                const { term, fitAddon } = initTerminal(agent.id);
+                agents.set(agent.id, { term, fitAddon, panel, evtSource: null });
+
+                connectSSE(agent.id);
+                setupControls(agent.id);
+            }
+
+            // Handle resize
+            const fitAll = () => agents.forEach(a => a.fitAddon.fit());
+            window.addEventListener('resize', fitAll);
+            new ResizeObserver(fitAll).observe(dashboard);
+
+            // Poll states
+            setInterval(pollStates, 2000);
+        }
+
+        init();
     </script>
 </body>
 </html>
