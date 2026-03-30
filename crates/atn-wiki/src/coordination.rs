@@ -11,10 +11,19 @@ pub const LOG_PAGE: &str = "Coordination/Log";
 /// Seed the default coordination pages if they don't already exist.
 pub async fn seed_coordination_pages(storage: &dyn AsyncWikiStorage, now: u64) {
     let seeds = [
-        (GOALS_PAGE, "# Goals\n\nDefine overall project objectives here.\n"),
+        (
+            GOALS_PAGE,
+            "# Goals\n\nDefine overall project objectives here.\n",
+        ),
         (AGENTS_PAGE, "# Agents\n\nWho is working on what.\n"),
-        (REQUESTS_PAGE, "# Requests\n\nOpen feature and bug fix requests.\n"),
-        (BLOCKERS_PAGE, "# Blockers\n\nCurrent blockers and dependency chain.\n"),
+        (
+            REQUESTS_PAGE,
+            "# Requests\n\nOpen feature and bug fix requests.\n",
+        ),
+        (
+            BLOCKERS_PAGE,
+            "# Blockers\n\nCurrent blockers and dependency chain.\n",
+        ),
         (LOG_PAGE, "# Coordination Log\n\n"),
     ];
 
@@ -26,12 +35,7 @@ pub async fn seed_coordination_pages(storage: &dyn AsyncWikiStorage, now: u64) {
 }
 
 /// Append a timestamped entry to the coordination log page.
-pub async fn append_log(
-    storage: &dyn AsyncWikiStorage,
-    entry: &str,
-    timestamp: &str,
-    now: u64,
-) {
+pub async fn append_log(storage: &dyn AsyncWikiStorage, entry: &str, timestamp: &str, now: u64) {
     let mut page = storage
         .get_page(LOG_PAGE)
         .await

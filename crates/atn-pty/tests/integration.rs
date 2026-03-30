@@ -39,9 +39,9 @@ async fn collect_output_until(
                     }
                 }
             }
-            Ok(Ok(_)) => {} // other signals
-            Ok(Err(_)) => break,  // channel closed or lagged
-            Err(_) => break,      // timeout
+            Ok(Ok(_)) => {}      // other signals
+            Ok(Err(_)) => break, // channel closed or lagged
+            Err(_) => break,     // timeout
         }
     }
 
@@ -149,8 +149,7 @@ async fn transcript_logging() {
     let log_dir = tmp.path().join("logs");
     let config = test_config(tmp.path());
 
-    let mut session = PtySession::spawn(&config, Some(log_dir.clone()))
-        .unwrap();
+    let mut session = PtySession::spawn(&config, Some(log_dir.clone())).unwrap();
 
     // Wait for bash to initialize.
     tokio::time::sleep(Duration::from_millis(500)).await;

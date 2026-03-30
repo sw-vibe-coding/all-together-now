@@ -35,15 +35,16 @@ impl AsyncWikiStorage for FileWikiStorage {
         let content = tokio::fs::read_to_string(&path).await.ok()?;
 
         let meta_path = self.meta_path(title);
-        let (created_at, updated_at) = if let Ok(meta_json) = tokio::fs::read_to_string(&meta_path).await {
-            if let Ok(meta) = serde_json::from_str::<PageMeta>(&meta_json) {
-                (meta.created_at, meta.updated_at)
+        let (created_at, updated_at) =
+            if let Ok(meta_json) = tokio::fs::read_to_string(&meta_path).await {
+                if let Ok(meta) = serde_json::from_str::<PageMeta>(&meta_json) {
+                    (meta.created_at, meta.updated_at)
+                } else {
+                    (0, 0)
+                }
             } else {
                 (0, 0)
-            }
-        } else {
-            (0, 0)
-        };
+            };
 
         Some(WikiPage {
             title: title.to_string(),
@@ -154,12 +155,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let storage = FileWikiStorage::new(dir.path());
 
-        storage
-            .save_page(WikiPage::new("A", "aaa", 1))
-            .await;
-        storage
-            .save_page(WikiPage::new("B", "bbb", 2))
-            .await;
+        storage.save_page(WikiPage::new("A", "aaa", 1)).await;
+        storage.save_page(WikiPage::new("B", "bbb", 2)).await;
 
         let pages = storage.list_pages().await;
         assert_eq!(pages.len(), 2);

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use atn_core::event::{InputEvent, PushEvent};
-use atn_core::inbox::{InboxMessage, ATN_DIR_NAME, INBOXES_DIR, OUTBOXES_DIR};
-use atn_core::router::{route_event, EventLogEntry, RouteDecision};
+use atn_core::inbox::{ATN_DIR_NAME, INBOXES_DIR, InboxMessage, OUTBOXES_DIR};
+use atn_core::router::{EventLogEntry, RouteDecision, route_event};
 use atn_pty::manager::SessionManager;
 use atn_wiki::coordination;
 use atn_wiki::storage::FileWikiStorage;
@@ -151,9 +151,7 @@ async fn process_outbox_file(
             // Poke the target agent's PTY with a notification.
             let notification = format!(
                 "\n[ATN] Message from {}: {} (priority: {:?})\n",
-                event.source_agent,
-                event.summary,
-                event.priority
+                event.source_agent, event.summary, event.priority
             );
             let tx = {
                 let mgr = manager.lock().await;
@@ -181,11 +179,7 @@ async fn process_outbox_file(
             let wiki_now = wiki_common::time::now();
             coordination::append_log(wiki.as_ref(), &entry, ts, wiki_now).await;
             append_to_requests(wiki.as_ref(), &event, reason, wiki_now).await;
-            tracing::warn!(
-                "Router: escalated event {} — {}",
-                event.id,
-                reason
-            );
+            tracing::warn!("Router: escalated event {} — {}", event.id, reason);
         }
         RouteDecision::Broadcast => {
             // Write to wiki Requests page for visibility.
@@ -213,12 +207,7 @@ async fn process_outbox_file(
     Ok(())
 }
 
-async fn append_to_requests(
-    wiki: &dyn AsyncWikiStorage,
-    event: &PushEvent,
-    note: &str,
-    now: u64,
-) {
+async fn append_to_requests(wiki: &dyn AsyncWikiStorage, event: &PushEvent, note: &str, now: u64) {
     let title = coordination::REQUESTS_PAGE;
     let mut page = wiki
         .get_page(title)

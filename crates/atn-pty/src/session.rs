@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 use atn_core::agent::{AgentConfig, AgentId, AgentState};
 use atn_core::error::{AtnError, Result};
@@ -116,9 +116,7 @@ impl PtySession {
 
             if !launch.is_empty() {
                 let _ = setup_tx
-                    .send(InputEvent::CoordinatorCommand {
-                        command: launch,
-                    })
+                    .send(InputEvent::CoordinatorCommand { command: launch })
                     .await;
             }
 
@@ -172,10 +170,8 @@ impl PtySession {
 
     /// Send Ctrl-C (0x03) to the agent's PTY.
     pub async fn send_ctrl_c(&self) -> Result<()> {
-        self.send_input(InputEvent::RawBytes {
-            bytes: vec![0x03],
-        })
-        .await
+        self.send_input(InputEvent::RawBytes { bytes: vec![0x03] })
+            .await
     }
 
     /// Get a new receiver for the agent's output stream.
@@ -193,11 +189,17 @@ impl PtySession {
     /// Sends Ctrl-C twice (1s apart), waits for exit, then kills if needed.
     pub async fn shutdown(&mut self) -> Result<()> {
         // First Ctrl-C (send directly through channel to avoid &self borrow).
-        let _ = self.input_tx.send(InputEvent::RawBytes { bytes: vec![0x03] }).await;
+        let _ = self
+            .input_tx
+            .send(InputEvent::RawBytes { bytes: vec![0x03] })
+            .await;
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         // Second Ctrl-C
-        let _ = self.input_tx.send(InputEvent::RawBytes { bytes: vec![0x03] }).await;
+        let _ = self
+            .input_tx
+            .send(InputEvent::RawBytes { bytes: vec![0x03] })
+            .await;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         // Try to kill the child process.

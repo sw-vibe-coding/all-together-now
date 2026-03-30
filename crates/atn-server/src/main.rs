@@ -30,7 +30,7 @@ use wiki_common::async_storage::AsyncWikiStorage;
 use wiki_common::etag::content_etag;
 use wiki_common::model::WikiPage;
 use wiki_common::parser::render_wiki_content;
-use wiki_common::patch::{apply_ops, PatchRequest};
+use wiki_common::patch::{PatchRequest, apply_ops};
 
 #[derive(Clone)]
 struct SharedState {
@@ -41,6 +41,10 @@ struct SharedState {
     agent_repo_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Agent configs for restart support.
     agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
+    /// Base directory for resolving relative paths.
+    base_dir: PathBuf,
+    /// Path to agents.toml for saving config.
+    config_path: PathBuf,
 }
 
 type AppState = SharedState;
@@ -175,10 +179,7 @@ async fn main() {
         .map(|(id, config)| (id.clone(), config.repo_path.clone()))
         .collect();
 
-    tracing::info!(
-        "{} agent(s) running",
-        manager.len()
-    );
+    tracing::info!("{} agent(s) running", manager.len());
 
     // Initialize wiki storage and seed coordination pages.
     let wiki_dir = base_dir.join(".atn").join("wiki");
@@ -207,6 +208,8 @@ async fn main() {
         event_log,
         agent_repo_paths: Arc::new(Mutex::new(agent_repo_paths)),
         agent_configs: Arc::new(Mutex::new(agent_configs_map)),
+        base_dir: base_dir.clone(),
+        config_path: config_path.clone(),
     };
 
     // Spawn config hot-reload watcher.
@@ -214,13 +217,19 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index_handler))
-        .route("/api/agents", get(list_agents))
+        .route("/api/agents", get(list_agents).post(create_agent))
+        .route("/api/agents/graph", get(agent_dependency_graph))
+        .route("/api/agents/save", post(save_config))
+        .route(
+            "/api/agents/{id}",
+            axum::routing::put(update_agent).delete(delete_agent),
+        )
         .route("/api/agents/{id}/sse", get(agent_sse))
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
         .route("/api/agents/{id}/state", get(agent_state))
         .route("/api/agents/{id}/restart", post(agent_restart))
-        .route("/api/agents/graph", get(agent_dependency_graph))
+        .route("/api/agents/{id}/stop", post(stop_agent))
         .route("/api/saga", get(get_project_saga))
         .route("/api/saga/distill", post(saga_distill))
         .route("/api/agents/{id}/saga", get(get_agent_saga))
@@ -381,11 +390,9 @@ async fn agent_input(
             .map_err(|_| StatusCode::NOT_FOUND)?;
         session.input_sender()
     };
-    tx.send(InputEvent::HumanText {
-        text: payload.text,
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.send(InputEvent::HumanText { text: payload.text })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
 
@@ -401,11 +408,9 @@ async fn agent_ctrl_c(
             .map_err(|_| StatusCode::NOT_FOUND)?;
         session.input_sender()
     };
-    tx.send(InputEvent::RawBytes {
-        bytes: vec![0x03],
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tx.send(InputEvent::RawBytes { bytes: vec![0x03] })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
 
@@ -436,14 +441,283 @@ async fn agent_restart(
     // Re-spawn from stored config.
     {
         let mut mgr = state.manager.lock().await;
-        mgr.spawn_agent(config)
-            .map_err(|e| {
-                tracing::error!("Failed to restart agent '{id}': {e}");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+        mgr.spawn_agent(config).map_err(|e| {
+            tracing::error!("Failed to restart agent '{id}': {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     }
 
     tracing::info!("Restarted agent: {id}");
+    Ok(StatusCode::OK)
+}
+
+// ── Agent CRUD ───────────────────────────────────────────────────────
+
+/// Request body for creating a new agent.
+#[derive(Deserialize)]
+struct CreateAgentBody {
+    id: String,
+    name: String,
+    repo_path: String,
+    #[serde(default = "default_role_str")]
+    role: String,
+    #[serde(default)]
+    setup_commands: Vec<String>,
+    #[serde(default)]
+    launch_command: String,
+}
+
+fn default_role_str() -> String {
+    "developer".to_string()
+}
+
+/// Request body for updating an agent's config.
+#[derive(Deserialize)]
+struct UpdateAgentBody {
+    name: Option<String>,
+    repo_path: Option<String>,
+    role: Option<String>,
+    setup_commands: Option<Vec<String>>,
+    launch_command: Option<String>,
+}
+
+fn parse_role(s: &str) -> atn_core::agent::AgentRole {
+    match s.to_lowercase().as_str() {
+        "qa" => atn_core::agent::AgentRole::QA,
+        "pm" => atn_core::agent::AgentRole::PM,
+        "coordinator" => atn_core::agent::AgentRole::Coordinator,
+        _ => atn_core::agent::AgentRole::Developer,
+    }
+}
+
+/// Create a new agent session.
+async fn create_agent(
+    State(state): State<AppState>,
+    Json(body): Json<CreateAgentBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let id = body.id.clone();
+
+    // Check if agent already exists.
+    {
+        let configs = state.agent_configs.lock().await;
+        if configs.contains_key(&id) {
+            return Err((StatusCode::CONFLICT, format!("Agent '{id}' already exists")));
+        }
+    }
+
+    let role = parse_role(&body.role);
+    let repo_path = if std::path::Path::new(&body.repo_path).is_absolute() {
+        PathBuf::from(&body.repo_path)
+    } else {
+        state.base_dir.join(&body.repo_path)
+    };
+
+    let config = AgentConfig {
+        id: AgentId(id.clone()),
+        name: body.name,
+        repo_path: repo_path.clone(),
+        role,
+        setup_commands: body.setup_commands,
+        launch_command: body.launch_command,
+    };
+
+    // Spawn the agent session.
+    {
+        let mut mgr = state.manager.lock().await;
+        mgr.spawn_agent(config.clone()).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to spawn agent: {e}"),
+            )
+        })?;
+    }
+
+    // Store config and repo path.
+    {
+        let mut configs = state.agent_configs.lock().await;
+        configs.insert(id.clone(), config);
+    }
+    {
+        let mut repo_paths = state.agent_repo_paths.lock().await;
+        repo_paths.insert(id.clone(), repo_path);
+    }
+
+    tracing::info!("Created agent: {id}");
+    Ok(StatusCode::CREATED)
+}
+
+/// Delete (destroy) an agent session.
+async fn delete_agent(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id.clone());
+
+    // Remove session.
+    let old_session = {
+        let mut mgr = state.manager.lock().await;
+        mgr.remove_agent(&agent_id)
+            .map_err(|_| StatusCode::NOT_FOUND)?
+    };
+
+    // Shutdown gracefully.
+    let mut session = old_session;
+    let _ = session.shutdown().await;
+
+    // Remove from config and repo paths.
+    {
+        let mut configs = state.agent_configs.lock().await;
+        configs.remove(&id);
+    }
+    {
+        let mut repo_paths = state.agent_repo_paths.lock().await;
+        repo_paths.remove(&id);
+    }
+
+    tracing::info!("Deleted agent: {id}");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Update an agent's configuration. Restarts the agent with new config.
+async fn update_agent(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<UpdateAgentBody>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id.clone());
+
+    // Get current config.
+    let mut config = {
+        let configs = state.agent_configs.lock().await;
+        configs.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    // Apply updates.
+    if let Some(name) = body.name {
+        config.name = name;
+    }
+    if let Some(repo_path) = body.repo_path {
+        config.repo_path = if std::path::Path::new(&repo_path).is_absolute() {
+            PathBuf::from(&repo_path)
+        } else {
+            state.base_dir.join(&repo_path)
+        };
+    }
+    if let Some(role) = body.role {
+        config.role = parse_role(&role);
+    }
+    if let Some(setup_commands) = body.setup_commands {
+        config.setup_commands = setup_commands;
+    }
+    if let Some(launch_command) = body.launch_command {
+        config.launch_command = launch_command;
+    }
+
+    // Shutdown existing session.
+    let old_session = {
+        let mut mgr = state.manager.lock().await;
+        mgr.remove_agent(&agent_id).ok()
+    };
+    if let Some(mut session) = old_session {
+        let _ = session.shutdown().await;
+    }
+
+    // Re-spawn with updated config.
+    {
+        let mut mgr = state.manager.lock().await;
+        mgr.spawn_agent(config.clone()).map_err(|e| {
+            tracing::error!("Failed to respawn agent '{id}' with new config: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    // Update stored config and repo path.
+    {
+        let mut configs = state.agent_configs.lock().await;
+        configs.insert(id.clone(), config.clone());
+    }
+    {
+        let mut repo_paths = state.agent_repo_paths.lock().await;
+        repo_paths.insert(id.clone(), config.repo_path);
+    }
+
+    tracing::info!("Updated agent: {id}");
+    Ok(StatusCode::OK)
+}
+
+/// Stop an agent without removing its config (can be restarted later).
+async fn stop_agent(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id.clone());
+
+    let old_session = {
+        let mut mgr = state.manager.lock().await;
+        mgr.remove_agent(&agent_id)
+            .map_err(|_| StatusCode::NOT_FOUND)?
+    };
+
+    let mut session = old_session;
+    let _ = session.shutdown().await;
+
+    tracing::info!("Stopped agent: {id}");
+    Ok(StatusCode::OK)
+}
+
+/// Save current agent configs back to agents.toml.
+async fn save_config(State(state): State<AppState>) -> Result<StatusCode, (StatusCode, String)> {
+    let configs = state.agent_configs.lock().await;
+
+    let agents: Vec<atn_core::config::AgentEntry> = configs
+        .values()
+        .map(|c| {
+            // Convert absolute path back to relative if under base_dir.
+            let repo_path = c
+                .repo_path
+                .strip_prefix(&state.base_dir)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| c.repo_path.to_string_lossy().to_string());
+            let repo_path = if repo_path.is_empty() {
+                ".".to_string()
+            } else {
+                repo_path
+            };
+            atn_core::config::AgentEntry {
+                id: c.id.0.clone(),
+                name: c.name.clone(),
+                repo_path,
+                role: c.role.clone(),
+                setup_commands: c.setup_commands.clone(),
+                launch_command: c.launch_command.clone(),
+            }
+        })
+        .collect();
+
+    // Read existing config to preserve project metadata.
+    let project = atn_core::config::load_project_config(&state.config_path)
+        .map(|c| c.project)
+        .unwrap_or_default();
+
+    let config = atn_core::config::ProjectConfig { project, agents };
+
+    let toml_str = toml::to_string_pretty(&config).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to serialize config: {e}"),
+        )
+    })?;
+
+    tokio::fs::write(&state.config_path, toml_str)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to write config: {e}"),
+            )
+        })?;
+
+    tracing::info!("Saved config to {}", state.config_path.display());
     Ok(StatusCode::OK)
 }
 
@@ -456,21 +730,15 @@ struct DepGraphNode {
     blocked_on: Vec<String>,
 }
 
-async fn agent_dependency_graph(
-    State(state): State<AppState>,
-) -> Json<Vec<DepGraphNode>> {
+async fn agent_dependency_graph(State(state): State<AppState>) -> Json<Vec<DepGraphNode>> {
     let pending: Vec<_> = {
         let mgr = state.manager.lock().await;
         mgr.agent_ids()
             .iter()
             .filter_map(|id| {
-                mgr.get_session(id).ok().map(|session| {
-                    (
-                        id.0.clone(),
-                        session.name().to_string(),
-                        session.state(),
-                    )
-                })
+                mgr.get_session(id)
+                    .ok()
+                    .map(|session| (id.0.clone(), session.name().to_string(), session.state()))
             })
             .collect()
     };
@@ -506,21 +774,20 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
     // Spawn the blocking file watcher in a dedicated thread.
     std::thread::spawn(move || {
         let tx = tx;
-        let mut watcher = match notify::recommended_watcher(
-            move |res: Result<notify::Event, notify::Error>| {
+        let mut watcher =
+            match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res
                     && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
                 {
                     let _ = tx.blocking_send(());
                 }
-            },
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!("Failed to create config file watcher: {e}");
-                return;
-            }
-        };
+            }) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("Failed to create config file watcher: {e}");
+                    return;
+                }
+            };
         if let Err(e) = watcher.watch(&config_path, RecursiveMode::NonRecursive) {
             tracing::error!("Failed to watch {}: {e}", config_path.display());
             return;
@@ -620,9 +887,7 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
 /// Build a SagaResponse from a repo path (blocking I/O in spawn_blocking).
 async fn saga_for_path(repo_path: PathBuf) -> SagaResponse {
     tokio::task::spawn_blocking(move || {
-        let saga = atn_trail::reader::load_saga(&repo_path)
-            .ok()
-            .flatten();
+        let saga = atn_trail::reader::load_saga(&repo_path).ok().flatten();
         let steps = atn_trail::reader::list_steps(&repo_path).unwrap_or_default();
         let task_type = steps
             .iter()
@@ -632,8 +897,7 @@ async fn saga_for_path(repo_path: PathBuf) -> SagaResponse {
         let trajectories = if task_type.is_empty() {
             vec![]
         } else {
-            atn_trail::reader::load_trajectories(&repo_path, task_type)
-                .unwrap_or_default()
+            atn_trail::reader::load_trajectories(&repo_path, task_type).unwrap_or_default()
         };
         SagaResponse {
             saga,
@@ -661,10 +925,7 @@ async fn get_agent_saga(
     State(state): State<AppState>,
 ) -> Result<Json<SagaResponse>, StatusCode> {
     let repo_paths = state.agent_repo_paths.lock().await;
-    let repo_path = repo_paths
-        .get(&id)
-        .ok_or(StatusCode::NOT_FOUND)?
-        .clone();
+    let repo_path = repo_paths.get(&id).ok_or(StatusCode::NOT_FOUND)?.clone();
     drop(repo_paths);
     Ok(Json(saga_for_path(repo_path).await))
 }
@@ -713,9 +974,7 @@ async fn wiki_get_page(
     };
 
     let mut response = Json(body).into_response();
-    response
-        .headers_mut()
-        .insert("ETag", etag.parse().unwrap());
+    response.headers_mut().insert("ETag", etag.parse().unwrap());
     Ok(response)
 }
 
@@ -769,9 +1028,7 @@ async fn wiki_put_page(
     };
 
     let mut response = Json(resp).into_response();
-    response
-        .headers_mut()
-        .insert("ETag", etag.parse().unwrap());
+    response.headers_mut().insert("ETag", etag.parse().unwrap());
     *response.status_mut() = if is_update {
         StatusCode::OK
     } else {
@@ -825,9 +1082,7 @@ async fn wiki_patch_page(
     };
 
     let mut response = Json(resp).into_response();
-    response
-        .headers_mut()
-        .insert("ETag", etag.parse().unwrap());
+    response.headers_mut().insert("ETag", etag.parse().unwrap());
     Ok(response)
 }
 

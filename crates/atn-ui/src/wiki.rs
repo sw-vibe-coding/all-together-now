@@ -330,8 +330,7 @@ fn save_page(
     use gloo_net::http::Request;
     wasm_bindgen_futures::spawn_local(async move {
         let url = format!("/api/wiki/{}", js_sys::encode_uri_component(&title));
-        let mut req = Request::put(&url)
-            .header("Content-Type", "application/json");
+        let mut req = Request::put(&url).header("Content-Type", "application/json");
         if let Some(ref etag_str) = etag_val {
             req = req.header("If-Match", etag_str);
         }

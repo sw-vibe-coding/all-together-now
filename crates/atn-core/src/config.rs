@@ -122,7 +122,10 @@ role = "qa"
             launch_command: String::new(),
         };
         let config = entry.to_agent_config(Path::new("/home/user/project"));
-        assert_eq!(config.repo_path, PathBuf::from("/home/user/project/../other-repo"));
+        assert_eq!(
+            config.repo_path,
+            PathBuf::from("/home/user/project/../other-repo")
+        );
     }
 
     #[test]

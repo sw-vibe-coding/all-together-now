@@ -149,9 +149,40 @@
         .traj-reward-zero { color: #9ca3af; }
         .saga-none { color: #666; font-size: 14px; padding: 40px; text-align: center; }
 
-        /* Restart button */
+        /* Restart / Stop / Delete buttons */
         .btn-restart { background: #1e3a5f; color: #60a5fa; font-size: 11px; padding: 6px 8px; }
         .btn-restart:hover { background: #264f78; }
+        .btn-stop { background: #78350f; color: #fbbf24; font-size: 11px; padding: 6px 8px; }
+        .btn-stop:hover { background: #92400e; }
+        .btn-delete { background: #7f1d1d; color: #fca5a5; font-size: 11px; padding: 6px 8px; }
+        .btn-delete:hover { background: #991b1b; }
+        .btn-edit-cfg { background: transparent; color: #888; font-size: 11px; padding: 6px 8px; border: 1px solid #0f3460; }
+        .btn-edit-cfg:hover { background: #0f3460; color: #c9d1d9; }
+        .btn-save-cfg { background: #4ecca3; color: #1a1a2e; font-size: 12px; padding: 4px 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-save-cfg:hover { background: #3db892; }
+
+        /* New agent form */
+        .new-agent-bar { padding: 8px; border-bottom: 1px solid #0f3460; background: #16213e; flex-shrink: 0; display: none; }
+        .new-agent-bar.visible { display: block; }
+        .new-agent-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .new-agent-form input, .new-agent-form select { padding: 5px 8px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
+        .new-agent-form input:focus { border-color: #e94560; }
+        .new-agent-form .field-id { width: 100px; }
+        .new-agent-form .field-name { width: 140px; }
+        .new-agent-form .field-path { width: 200px; }
+        .new-agent-form .field-launch { width: 120px; }
+        .new-agent-form button { padding: 5px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
+        .new-agent-form .btn-create { background: #4ecca3; color: #1a1a2e; }
+        .new-agent-form .btn-create:hover { background: #3db892; }
+        .new-agent-form .btn-cancel { background: transparent; color: #888; border: 1px solid #0f3460; }
+
+        /* Agent config editor overlay */
+        .agent-config-editor { display: none; padding: 8px; border-top: 1px solid #0f3460; background: #0d1117; font-size: 12px; }
+        .agent-config-editor.visible { display: block; }
+        .agent-config-editor label { display: block; color: #888; margin-top: 4px; font-size: 11px; }
+        .agent-config-editor input, .agent-config-editor select { width: 100%; padding: 4px 6px; background: #1a1a2e; border: 1px solid #0f3460; border-radius: 3px; color: #e0e0e0; font-size: 12px; outline: none; margin-top: 2px; }
+        .agent-config-editor .cfg-btns { display: flex; gap: 6px; margin-top: 6px; }
+        .agent-config-editor .cfg-btns button { padding: 4px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; }
 
         /* Dependency graph */
         .graph-container { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 8px; }
@@ -171,6 +202,8 @@
     <header>
         <h1>All Together Now</h1>
         <span class="agent-count" id="agent-count"></span>
+        <button class="btn-save-cfg" id="btn-save-toml" onclick="saveToToml()" title="Save current agents to agents.toml">Save</button>
+        <button style="padding:4px 10px;border:1px solid #0f3460;border-radius:4px;background:transparent;color:#4ecca3;cursor:pointer;font-size:12px;" id="btn-new-agent" onclick="toggleNewAgent()">+ Agent</button>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
             <button class="view-tab" id="tab-graph" onclick="switchView('graph')">Graph</button>
@@ -179,6 +212,22 @@
             <button class="view-tab" id="tab-events" onclick="switchView('events')">Events</button>
         </div>
     </header>
+    <div class="new-agent-bar" id="new-agent-bar">
+        <div class="new-agent-form">
+            <input class="field-id" id="new-id" placeholder="agent-id">
+            <input class="field-name" id="new-name" placeholder="Display Name">
+            <input class="field-path" id="new-path" placeholder="Repo path (e.g. . or /abs/path)">
+            <select id="new-role">
+                <option value="developer">Developer</option>
+                <option value="qa">QA</option>
+                <option value="pm">PM</option>
+                <option value="coordinator">Coordinator</option>
+            </select>
+            <input class="field-launch" id="new-launch" placeholder="Launch cmd" value="bash">
+            <button class="btn-create" onclick="createAgent()">Create</button>
+            <button class="btn-cancel" onclick="toggleNewAgent()">Cancel</button>
+        </div>
+    </div>
     <div class="dashboard" id="dashboard"></div>
     <div class="wiki-container" id="wiki-view" style="display:none;">
         <div class="wiki-sidebar">
@@ -286,6 +335,26 @@
                     <button class="btn-send" data-agent="${agent.id}">Send</button>
                     <button class="btn-ctrl-c" data-agent="${agent.id}">^C</button>
                     <button class="btn-restart" data-agent="${agent.id}">Restart</button>
+                    <button class="btn-stop" data-agent="${agent.id}">Stop</button>
+                    <button class="btn-edit-cfg" data-agent="${agent.id}">Config</button>
+                    <button class="btn-delete" data-agent="${agent.id}">Delete</button>
+                </div>
+                <div class="agent-config-editor" id="cfg-${agent.id}">
+                    <label>Name <input id="cfg-name-${agent.id}" value="${agent.name}"></label>
+                    <label>Repo Path <input id="cfg-path-${agent.id}" placeholder="/path/to/repo"></label>
+                    <label>Role
+                        <select id="cfg-role-${agent.id}">
+                            <option value="developer" ${agent.role === 'developer' ? 'selected' : ''}>Developer</option>
+                            <option value="qa" ${agent.role === 'qa' ? 'selected' : ''}>QA</option>
+                            <option value="pm" ${agent.role === 'pm' ? 'selected' : ''}>PM</option>
+                            <option value="coordinator" ${agent.role === 'coordinator' ? 'selected' : ''}>Coordinator</option>
+                        </select>
+                    </label>
+                    <label>Launch Command <input id="cfg-launch-${agent.id}" placeholder="bash"></label>
+                    <div class="cfg-btns">
+                        <button class="btn-create" onclick="applyConfig('${agent.id}')">Apply & Restart</button>
+                        <button class="btn-cancel" onclick="toggleConfig('${agent.id}')">Cancel</button>
+                    </div>
                 </div>
             `;
             return panel;
@@ -371,7 +440,6 @@
                 try {
                     const res = await fetch(`${API_BASE}/api/agents/${agentId}/restart`, { method: 'POST' });
                     if (res.ok) {
-                        // Reconnect SSE after a brief delay.
                         const agent = agents.get(agentId);
                         if (agent && agent.evtSource) agent.evtSource.close();
                         agent.term.clear();
@@ -385,6 +453,51 @@
                 }
                 setTimeout(() => { restartBtn.textContent = 'Restart'; restartBtn.disabled = false; }, 2000);
             });
+
+            const stopBtn = panel.querySelector('.btn-stop');
+            stopBtn.addEventListener('click', async () => {
+                stopBtn.textContent = 'Stopping...';
+                stopBtn.disabled = true;
+                try {
+                    const res = await fetch(`${API_BASE}/api/agents/${agentId}/stop`, { method: 'POST' });
+                    if (res.ok) {
+                        const agent = agents.get(agentId);
+                        if (agent && agent.evtSource) agent.evtSource.close();
+                        stopBtn.textContent = 'Stopped';
+                    } else {
+                        stopBtn.textContent = 'Failed';
+                    }
+                } catch (_) {
+                    stopBtn.textContent = 'Error';
+                }
+                setTimeout(() => { stopBtn.textContent = 'Stop'; stopBtn.disabled = false; }, 2000);
+            });
+
+            const deleteBtn = panel.querySelector('.btn-delete');
+            deleteBtn.addEventListener('click', async () => {
+                if (!confirm(`Delete agent "${agentId}"? This will stop the session and remove it.`)) return;
+                deleteBtn.textContent = 'Deleting...';
+                deleteBtn.disabled = true;
+                try {
+                    const res = await fetch(`${API_BASE}/api/agents/${agentId}`, { method: 'DELETE' });
+                    if (res.ok || res.status === 204) {
+                        const agent = agents.get(agentId);
+                        if (agent && agent.evtSource) agent.evtSource.close();
+                        agents.delete(agentId);
+                        panel.remove();
+                        refreshDashboardLayout();
+                    } else {
+                        deleteBtn.textContent = 'Failed';
+                        setTimeout(() => { deleteBtn.textContent = 'Delete'; deleteBtn.disabled = false; }, 2000);
+                    }
+                } catch (_) {
+                    deleteBtn.textContent = 'Error';
+                    setTimeout(() => { deleteBtn.textContent = 'Delete'; deleteBtn.disabled = false; }, 2000);
+                }
+            });
+
+            const editCfgBtn = panel.querySelector('.btn-edit-cfg');
+            editCfgBtn.addEventListener('click', () => toggleConfig(agentId));
         }
 
         // Poll agent states every 2 seconds
@@ -456,6 +569,136 @@
         }
 
         init();
+
+        // ── Agent lifecycle controls ──────────────────────
+
+        function toggleNewAgent() {
+            const bar = document.getElementById('new-agent-bar');
+            bar.classList.toggle('visible');
+        }
+
+        async function createAgent() {
+            const id = document.getElementById('new-id').value.trim();
+            const name = document.getElementById('new-name').value.trim();
+            const repoPath = document.getElementById('new-path').value.trim();
+            const role = document.getElementById('new-role').value;
+            const launch = document.getElementById('new-launch').value.trim();
+
+            if (!id || !name) { alert('Agent ID and Name are required.'); return; }
+
+            const body = {
+                id, name,
+                repo_path: repoPath || '.',
+                role,
+                launch_command: launch || 'bash',
+            };
+
+            try {
+                const res = await fetch(`${API_BASE}/api/agents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok || res.status === 201) {
+                    // Clear form and hide bar.
+                    document.getElementById('new-id').value = '';
+                    document.getElementById('new-name').value = '';
+                    document.getElementById('new-path').value = '';
+                    document.getElementById('new-launch').value = 'bash';
+                    document.getElementById('new-agent-bar').classList.remove('visible');
+                    // Add the new panel.
+                    addAgentPanel({ id, name, role, state: { state: 'starting' } });
+                } else {
+                    const text = await res.text();
+                    alert(`Failed to create agent: ${text}`);
+                }
+            } catch (e) {
+                alert(`Error creating agent: ${e}`);
+            }
+        }
+
+        function addAgentPanel(agent) {
+            const dashboard = document.getElementById('dashboard');
+            const panel = createAgentPanel(agent);
+            dashboard.appendChild(panel);
+
+            const { term, fitAddon } = initTerminal(agent.id);
+            agents.set(agent.id, { term, fitAddon, panel, evtSource: null });
+            connectSSE(agent.id);
+            setupControls(agent.id);
+            refreshDashboardLayout();
+        }
+
+        function refreshDashboardLayout() {
+            const dashboard = document.getElementById('dashboard');
+            const count = dashboard.querySelectorAll('.agent-panel').length;
+            document.getElementById('agent-count').textContent = `${count} agent${count !== 1 ? 's' : ''}`;
+            if (count <= 1) dashboard.className = 'dashboard cols-1';
+            else if (count <= 2) dashboard.className = 'dashboard cols-2';
+            else dashboard.className = 'dashboard cols-3';
+            agents.forEach(a => a.fitAddon.fit());
+        }
+
+        function toggleConfig(agentId) {
+            const editor = document.getElementById(`cfg-${agentId}`);
+            editor.classList.toggle('visible');
+        }
+
+        async function applyConfig(agentId) {
+            const name = document.getElementById(`cfg-name-${agentId}`).value.trim();
+            const repoPath = document.getElementById(`cfg-path-${agentId}`).value.trim();
+            const role = document.getElementById(`cfg-role-${agentId}`).value;
+            const launch = document.getElementById(`cfg-launch-${agentId}`).value.trim();
+
+            const body = {};
+            if (name) body.name = name;
+            if (repoPath) body.repo_path = repoPath;
+            if (role) body.role = role;
+            if (launch) body.launch_command = launch;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/agents/${agentId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (res.ok) {
+                    toggleConfig(agentId);
+                    // Reconnect SSE after restart.
+                    const agent = agents.get(agentId);
+                    if (agent && agent.evtSource) agent.evtSource.close();
+                    agent.term.clear();
+                    setTimeout(() => connectSSE(agentId), 1000);
+                    // Update header display.
+                    const panel = document.getElementById(`panel-${agentId}`);
+                    if (name) panel.querySelector('.agent-name').textContent = name;
+                    if (role) panel.querySelector('.agent-role').textContent = role;
+                } else {
+                    alert('Failed to update agent config.');
+                }
+            } catch (e) {
+                alert(`Error updating config: ${e}`);
+            }
+        }
+
+        async function saveToToml() {
+            const btn = document.getElementById('btn-save-toml');
+            btn.textContent = 'Saving...';
+            btn.disabled = true;
+            try {
+                const res = await fetch(`${API_BASE}/api/agents/save`, { method: 'POST' });
+                if (res.ok) {
+                    btn.textContent = 'Saved!';
+                } else {
+                    const text = await res.text();
+                    btn.textContent = 'Failed';
+                    console.error('Save failed:', text);
+                }
+            } catch (_) {
+                btn.textContent = 'Error';
+            }
+            setTimeout(() => { btn.textContent = 'Save'; btn.disabled = false; }, 2000);
+        }
 
         // ── View switching ─────────────────────────────────
         function switchView(view) {

@@ -97,9 +97,7 @@ mod tests {
             InputEvent::HumanText {
                 text: "hello".to_string(),
             },
-            InputEvent::RawBytes {
-                bytes: vec![0x03],
-            },
+            InputEvent::RawBytes { bytes: vec![0x03] },
             InputEvent::CoordinatorCommand {
                 command: "coord inbox".to_string(),
             },
