@@ -83,6 +83,31 @@
         .wiki-new-page { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #0f3460; }
         .wiki-new-page input { flex: 1; padding: 4px 8px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
         .wiki-new-page button { padding: 4px 10px; background: #4ecca3; color: #1a1a2e; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+        /* Events log */
+        .events-container { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 8px; }
+        .events-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px; flex-shrink: 0; }
+        .events-toolbar h2 { font-size: 16px; color: #c9d1d9; flex: 1; }
+        .events-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+        .events-toolbar button:hover { background: #0f3460; }
+        .events-list { flex: 1; overflow-y: auto; }
+        .event-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; }
+        .event-card .event-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+        .event-card .event-kind { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+        .kind-feature_request { background: #1e3a5f; color: #60a5fa; }
+        .kind-bug_fix_request { background: #7f1d1d; color: #fca5a5; }
+        .kind-completion_notice { background: #064e3b; color: #6ee7b7; }
+        .kind-blocked_notice { background: #78350f; color: #fbbf24; }
+        .kind-needs_info { background: #4c1d95; color: #a78bfa; }
+        .kind-verification_request { background: #064e3b; color: #34d399; }
+        .event-card .event-summary { font-size: 13px; color: #e0e0e0; }
+        .event-card .event-meta { font-size: 11px; color: #888; margin-top: 4px; display: flex; gap: 12px; }
+        .event-card .event-decision { font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+        .decision-deliver { background: #064e3b; color: #34d399; }
+        .decision-escalate { background: #7f1d1d; color: #fca5a5; }
+        .decision-broadcast { background: #1e3a5f; color: #60a5fa; }
+        .escalation-banner { background: #7f1d1d; border: 1px solid #f87171; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; color: #fca5a5; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+        .escalation-banner .esc-icon { font-size: 18px; }
     </style>
 </head>
 <body>
@@ -92,6 +117,7 @@
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
             <button class="view-tab" id="tab-wiki" onclick="switchView('wiki')">Wiki</button>
+            <button class="view-tab" id="tab-events" onclick="switchView('events')">Events</button>
         </div>
     </header>
     <div class="dashboard" id="dashboard"></div>
@@ -117,6 +143,15 @@
                 <textarea id="wiki-editor"></textarea>
             </div>
         </div>
+    </div>
+
+    <div class="events-container" id="events-view" style="display:none;">
+        <div class="events-toolbar">
+            <h2>Push Event Log</h2>
+            <button onclick="eventsRefresh()">Refresh</button>
+        </div>
+        <div id="events-escalations"></div>
+        <div class="events-list" id="events-list"></div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -303,9 +338,12 @@
         function switchView(view) {
             document.getElementById('dashboard').style.display = view === 'agents' ? '' : 'none';
             document.getElementById('wiki-view').style.display = view === 'wiki' ? '' : 'none';
+            document.getElementById('events-view').style.display = view === 'events' ? '' : 'none';
             document.getElementById('tab-agents').className = 'view-tab' + (view === 'agents' ? ' active' : '');
             document.getElementById('tab-wiki').className = 'view-tab' + (view === 'wiki' ? ' active' : '');
+            document.getElementById('tab-events').className = 'view-tab' + (view === 'events' ? ' active' : '');
             if (view === 'wiki') wikiLoadPageList();
+            if (view === 'events') eventsRefresh();
         }
 
         // ── Wiki state ─────────────────────────────────────
@@ -424,6 +462,101 @@
                 }
             } catch (_) {}
         }
+
+        // ── Events log ────────────────────────────────────────
+        let eventsLastIndex = 0;
+
+        const KIND_LABELS = {
+            feature_request: 'Feature Request',
+            bug_fix_request: 'Bug Fix',
+            completion_notice: 'Completed',
+            blocked_notice: 'Blocked',
+            needs_info: 'Needs Info',
+            verification_request: 'Verify',
+        };
+
+        function kindLabel(kind) { return KIND_LABELS[kind] || kind; }
+
+        function decisionClass(decision) {
+            if (decision.startsWith('deliver')) return 'decision-deliver';
+            if (decision.startsWith('escalate')) return 'decision-escalate';
+            return 'decision-broadcast';
+        }
+
+        function decisionLabel(decision) {
+            if (decision.startsWith('deliver:')) return 'Delivered to ' + decision.slice(8);
+            if (decision.startsWith('escalate:')) return 'Escalated: ' + decision.slice(9);
+            return 'Broadcast';
+        }
+
+        async function eventsRefresh() {
+            try {
+                const res = await fetch(`${API_BASE}/api/events?since=0`);
+                if (!res.ok) return;
+                const entries = await res.json();
+                const list = document.getElementById('events-list');
+                const escDiv = document.getElementById('events-escalations');
+                list.innerHTML = '';
+                escDiv.innerHTML = '';
+
+                // Show escalations at the top
+                const escalations = entries.filter(e => e.decision.startsWith('escalate'));
+                for (const esc of escalations) {
+                    const banner = document.createElement('div');
+                    banner.className = 'escalation-banner';
+                    banner.innerHTML = `<span class="esc-icon">!</span>
+                        <span><strong>Human attention needed:</strong> ${esc.event.summary}
+                        (from ${esc.event.source_agent}, target: ${esc.event.target_agent || 'none'}) &mdash; ${esc.decision.slice(9)}</span>`;
+                    escDiv.appendChild(banner);
+                }
+
+                // Show all events newest-first
+                for (let i = entries.length - 1; i >= 0; i--) {
+                    const entry = entries[i];
+                    const ev = entry.event;
+                    const card = document.createElement('div');
+                    card.className = 'event-card';
+                    card.innerHTML = `
+                        <div class="event-header">
+                            <span class="event-kind kind-${ev.kind}">${kindLabel(ev.kind)}</span>
+                            <span class="event-decision ${decisionClass(entry.decision)}">${decisionLabel(entry.decision)}</span>
+                        </div>
+                        <div class="event-summary">${ev.summary}</div>
+                        <div class="event-meta">
+                            <span>From: ${ev.source_agent}</span>
+                            <span>Target: ${ev.target_agent || '(broadcast)'}</span>
+                            <span>Priority: ${ev.priority}</span>
+                            <span>${entry.logged_at}</span>
+                        </div>`;
+                    list.appendChild(card);
+                }
+                eventsLastIndex = entries.length;
+            } catch (_) {}
+        }
+
+        // Poll events every 5 seconds for new escalations (shown as badge on tab)
+        let eventsPollCount = 0;
+        setInterval(async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/events?since=${eventsLastIndex}`);
+                if (!res.ok) return;
+                const entries = await res.json();
+                if (entries.length > 0) {
+                    eventsPollCount += entries.length;
+                    eventsLastIndex += entries.length;
+                    const tab = document.getElementById('tab-events');
+                    const hasEscalation = entries.some(e => e.decision.startsWith('escalate'));
+                    if (hasEscalation) {
+                        tab.style.borderColor = '#e94560';
+                        tab.style.color = '#e94560';
+                    }
+                    // If events view is active, refresh it
+                    if (document.getElementById('events-view').style.display !== 'none') {
+                        eventsRefresh();
+                    }
+                }
+            } catch (_) {}
+        }, 5000);
     </script>
 </body>
 </html>

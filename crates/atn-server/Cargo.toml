@@ -11,6 +11,7 @@ atn-trail = { workspace = true }
 wiki-common = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }
 futures-core = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

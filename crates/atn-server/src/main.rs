@@ -1,8 +1,10 @@
+mod router;
+
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
@@ -17,7 +19,8 @@ use tracing_subscriber::EnvFilter;
 
 use atn_core::agent::{AgentId, AgentState};
 use atn_core::config::load_project_config;
-use atn_core::event::{InputEvent, OutputSignal};
+use atn_core::event::{InputEvent, OutputSignal, PushEvent};
+use atn_core::router::EventLogEntry;
 use atn_pty::manager::SessionManager;
 use atn_wiki::storage::FileWikiStorage;
 use wiki_common::async_storage::AsyncWikiStorage;
@@ -30,6 +33,7 @@ use wiki_common::patch::{apply_ops, PatchRequest};
 struct SharedState {
     manager: Arc<Mutex<SessionManager>>,
     wiki: Arc<FileWikiStorage>,
+    event_log: router::EventLog,
 }
 
 type AppState = SharedState;
@@ -70,6 +74,17 @@ struct WikiConflictResponse {
     error: String,
     current_etag: String,
     page: WikiPageResponse,
+}
+
+#[derive(Deserialize)]
+struct EventLogQuery {
+    since: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct SubmitEventBody {
+    #[serde(flatten)]
+    event: PushEvent,
 }
 
 #[tokio::main]
@@ -117,6 +132,8 @@ async fn main() {
         }
     }
 
+    let agent_ids: Vec<String> = manager.agent_ids().iter().map(|id| id.0.clone()).collect();
+
     tracing::info!(
         "{} agent(s) running",
         manager.len()
@@ -129,9 +146,24 @@ async fn main() {
     atn_wiki::coordination::seed_coordination_pages(wiki.as_ref(), now).await;
     tracing::info!("Wiki storage initialized at {}", wiki_dir.display());
 
+    // Initialize event log and message router.
+    let event_log: router::EventLog = Arc::new(Mutex::new(Vec::new()));
+    router::ensure_outbox_dirs(&base_dir, &agent_ids).await;
+    let manager = Arc::new(Mutex::new(manager));
+
+    let _router_handle = router::spawn_message_router(
+        base_dir,
+        manager.clone(),
+        wiki.clone(),
+        event_log.clone(),
+        std::time::Duration::from_secs(2),
+    );
+    tracing::info!("Message router started (polling every 2s)");
+
     let state = SharedState {
-        manager: Arc::new(Mutex::new(manager)),
+        manager,
         wiki,
+        event_log,
     };
 
     let app = Router::new()
@@ -141,6 +173,7 @@ async fn main() {
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
         .route("/api/agents/{id}/state", get(agent_state))
+        .route("/api/events", get(list_events).post(submit_event))
         .route("/api/wiki", get(wiki_list_pages))
         .route(
             "/api/wiki/{*title}",
@@ -479,4 +512,37 @@ fn conflict_response(page: &WikiPage, current_etag: &str) -> Response {
     resp.headers_mut()
         .insert("ETag", current_etag.parse().unwrap());
     resp
+}
+
+// ── Event log handlers ─────────────────────────────────────────────────
+
+/// List event log entries. Optional `?since=N` returns entries after index N.
+async fn list_events(
+    Query(query): Query<EventLogQuery>,
+    State(state): State<AppState>,
+) -> Json<Vec<EventLogEntry>> {
+    let log = state.event_log.lock().await;
+    let since = query.since.unwrap_or(0);
+    Json(log.iter().skip(since).cloned().collect())
+}
+
+/// Submit a push event for routing (e.g., from the UI or an external tool).
+async fn submit_event(
+    State(_state): State<AppState>,
+    Json(body): Json<SubmitEventBody>,
+) -> StatusCode {
+    let event = body.event;
+
+    // Write the event to the source agent's outbox as a JSON file.
+    let outbox_dir = PathBuf::from(".atn")
+        .join("outboxes")
+        .join(&event.source_agent);
+    let _ = tokio::fs::create_dir_all(&outbox_dir).await;
+    let file_path = outbox_dir.join(format!("{}.json", event.id));
+    if let Ok(json) = serde_json::to_string_pretty(&event) {
+        let _ = tokio::fs::write(&file_path, json).await;
+    }
+
+    // The background router will pick it up on next poll.
+    StatusCode::ACCEPTED
 }
