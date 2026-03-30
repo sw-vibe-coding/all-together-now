@@ -108,6 +108,46 @@
         .decision-broadcast { background: #1e3a5f; color: #60a5fa; }
         .escalation-banner { background: #7f1d1d; border: 1px solid #f87171; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; color: #fca5a5; font-size: 13px; display: flex; align-items: center; gap: 8px; }
         .escalation-banner .esc-icon { font-size: 18px; }
+
+        /* Saga view */
+        .saga-container { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 8px; }
+        .saga-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px; flex-shrink: 0; }
+        .saga-toolbar h2 { font-size: 16px; color: #c9d1d9; flex: 1; }
+        .saga-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+        .saga-toolbar button:hover { background: #0f3460; }
+        .saga-toolbar .btn-distill { background: #4c1d95; color: #a78bfa; border-color: #4c1d95; }
+        .saga-toolbar .btn-distill:hover { background: #5b21b6; }
+        .saga-info { display: flex; gap: 16px; padding: 8px; flex-shrink: 0; }
+        .saga-info .saga-stat { background: #16213e; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 14px; }
+        .saga-info .saga-stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .saga-info .saga-stat-value { font-size: 16px; color: #c9d1d9; font-weight: 600; }
+        .saga-steps { flex: 1; overflow-y: auto; padding: 4px 0; }
+        .step-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: flex-start; gap: 12px; }
+        .step-card.step-current { border-color: #e94560; background: #1e1a2e; }
+        .step-number { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+        .step-pending .step-number { background: #1f2937; color: #6b7280; }
+        .step-in-progress .step-number { background: #4c1d95; color: #a78bfa; }
+        .step-completed .step-number { background: #064e3b; color: #6ee7b7; }
+        .step-blocked .step-number { background: #7f1d1d; color: #fca5a5; }
+        .step-body { flex: 1; min-width: 0; }
+        .step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+        .step-slug { font-size: 14px; font-weight: 600; color: #c9d1d9; }
+        .step-status { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+        .step-pending .step-status { background: #1f2937; color: #9ca3af; }
+        .step-in-progress .step-status { background: #4c1d95; color: #a78bfa; }
+        .step-completed .step-status { background: #064e3b; color: #6ee7b7; }
+        .step-blocked .step-status { background: #7f1d1d; color: #fca5a5; }
+        .step-desc { font-size: 12px; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .step-meta { font-size: 11px; color: #666; margin-top: 2px; display: flex; gap: 12px; }
+        .saga-trajectories { flex-shrink: 0; max-height: 200px; overflow-y: auto; border-top: 1px solid #0f3460; margin-top: 8px; padding-top: 8px; }
+        .saga-trajectories h3 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+        .traj-card { background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; padding: 6px 10px; margin-bottom: 4px; font-size: 12px; }
+        .traj-card .traj-action { color: #c9d1d9; }
+        .traj-card .traj-meta { color: #666; font-size: 11px; margin-top: 2px; }
+        .traj-reward-pos { color: #6ee7b7; }
+        .traj-reward-neg { color: #fca5a5; }
+        .traj-reward-zero { color: #9ca3af; }
+        .saga-none { color: #666; font-size: 14px; padding: 40px; text-align: center; }
     </style>
 </head>
 <body>
@@ -116,6 +156,7 @@
         <span class="agent-count" id="agent-count"></span>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
+            <button class="view-tab" id="tab-saga" onclick="switchView('saga')">Saga</button>
             <button class="view-tab" id="tab-wiki" onclick="switchView('wiki')">Wiki</button>
             <button class="view-tab" id="tab-events" onclick="switchView('events')">Events</button>
         </div>
@@ -142,6 +183,20 @@
             <div class="wiki-edit-area" id="wiki-edit-area" style="display:none;">
                 <textarea id="wiki-editor"></textarea>
             </div>
+        </div>
+    </div>
+
+    <div class="saga-container" id="saga-view" style="display:none;">
+        <div class="saga-toolbar">
+            <h2>Saga Progress</h2>
+            <button onclick="sagaRefresh()">Refresh</button>
+            <button class="btn-distill" id="saga-distill-btn" onclick="sagaDistill()" style="display:none;">Distill Skill</button>
+        </div>
+        <div class="saga-info" id="saga-info"></div>
+        <div class="saga-steps" id="saga-steps"></div>
+        <div class="saga-trajectories" id="saga-trajectories" style="display:none;">
+            <h3>Trajectories (current task type)</h3>
+            <div id="saga-traj-list"></div>
         </div>
     </div>
 
@@ -194,6 +249,7 @@
                 <div class="agent-header">
                     <span class="agent-name">${agent.name}</span>
                     <span class="agent-role">${agent.role}</span>
+                    <span id="saga-badge-${agent.id}" style="font-size:11px;color:#a78bfa;"></span>
                     <span class="spacer"></span>
                     <span class="conn-dot disconnected" id="conn-${agent.id}"></span>
                     <span class="state-badge state-${sk}" id="badge-${agent.id}">${stateLabel(agent.state)}</span>
@@ -299,6 +355,21 @@
             } catch (_) { /* ignore */ }
         }
 
+        async function pollAgentSagas(agentIds) {
+            for (const id of agentIds) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/agents/${id}/saga`);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    const badge = document.getElementById(`saga-badge-${id}`);
+                    if (badge && data.saga) {
+                        const current = data.steps.find(s => s.status === 'in-progress');
+                        badge.textContent = current ? `Step ${current.number}: ${current.slug}` : '';
+                    }
+                } catch (_) {}
+            }
+        }
+
         async function init() {
             const res = await fetch(`${API_BASE}/api/agents`);
             const agentList = await res.json();
@@ -323,6 +394,9 @@
                 setupControls(agent.id);
             }
 
+            // Fetch per-agent saga step for badges
+            pollAgentSagas(agentList.map(a => a.id));
+
             // Handle resize
             const fitAll = () => agents.forEach(a => a.fitAddon.fit());
             window.addEventListener('resize', fitAll);
@@ -337,11 +411,13 @@
         // ── View switching ─────────────────────────────────
         function switchView(view) {
             document.getElementById('dashboard').style.display = view === 'agents' ? '' : 'none';
+            document.getElementById('saga-view').style.display = view === 'saga' ? '' : 'none';
             document.getElementById('wiki-view').style.display = view === 'wiki' ? '' : 'none';
             document.getElementById('events-view').style.display = view === 'events' ? '' : 'none';
-            document.getElementById('tab-agents').className = 'view-tab' + (view === 'agents' ? ' active' : '');
-            document.getElementById('tab-wiki').className = 'view-tab' + (view === 'wiki' ? ' active' : '');
-            document.getElementById('tab-events').className = 'view-tab' + (view === 'events' ? ' active' : '');
+            for (const t of ['agents', 'saga', 'wiki', 'events']) {
+                document.getElementById('tab-' + t).className = 'view-tab' + (view === t ? ' active' : '');
+            }
+            if (view === 'saga') sagaRefresh();
             if (view === 'wiki') wikiLoadPageList();
             if (view === 'events') eventsRefresh();
         }
@@ -461,6 +537,119 @@
                     wikiOpenPage(title);
                 }
             } catch (_) {}
+        }
+
+        // ── Saga ──────────────────────────────────────────────
+        let sagaCurrentTaskType = null;
+
+        async function sagaRefresh() {
+            try {
+                const res = await fetch(`${API_BASE}/api/saga`);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderSaga(data);
+            } catch (_) {}
+        }
+
+        function renderSaga(data) {
+            const infoDiv = document.getElementById('saga-info');
+            const stepsDiv = document.getElementById('saga-steps');
+            const trajDiv = document.getElementById('saga-trajectories');
+            const trajList = document.getElementById('saga-traj-list');
+            const distillBtn = document.getElementById('saga-distill-btn');
+
+            if (!data.saga) {
+                infoDiv.innerHTML = '';
+                stepsDiv.innerHTML = '<div class="saga-none">No .agentrail/ saga found in this project.</div>';
+                trajDiv.style.display = 'none';
+                distillBtn.style.display = 'none';
+                return;
+            }
+
+            const saga = data.saga;
+            const steps = data.steps;
+            const completed = steps.filter(s => s.status === 'completed').length;
+            const total = steps.length;
+            const current = steps.find(s => s.status === 'in-progress');
+
+            infoDiv.innerHTML = `
+                <div class="saga-stat"><div class="saga-stat-label">Saga</div><div class="saga-stat-value">${saga.name}</div></div>
+                <div class="saga-stat"><div class="saga-stat-label">Status</div><div class="saga-stat-value">${saga.status}</div></div>
+                <div class="saga-stat"><div class="saga-stat-label">Progress</div><div class="saga-stat-value">${completed} / ${total}</div></div>
+                <div class="saga-stat"><div class="saga-stat-label">Current Step</div><div class="saga-stat-value">${current ? current.slug : 'none'}</div></div>
+            `;
+
+            stepsDiv.innerHTML = '';
+            for (const step of steps) {
+                const statusCls = 'step-' + step.status.replace(/_/g, '-');
+                const isCurrent = step.status === 'in-progress';
+                const card = document.createElement('div');
+                card.className = `step-card ${statusCls}` + (isCurrent ? ' step-current' : '');
+                const desc = step.description.length > 120 ? step.description.slice(0, 120) + '...' : step.description;
+                card.innerHTML = `
+                    <div class="step-number">${step.number}</div>
+                    <div class="step-body">
+                        <div class="step-header">
+                            <span class="step-slug">${step.slug}</span>
+                            <span class="step-status">${step.status}</span>
+                        </div>
+                        <div class="step-desc">${desc}</div>
+                        <div class="step-meta">
+                            ${step.role ? `<span>Role: ${step.role}</span>` : ''}
+                            ${step.task_type ? `<span>Task: ${step.task_type}</span>` : ''}
+                            ${step.completed_at ? `<span>Done: ${step.completed_at}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+                stepsDiv.appendChild(card);
+            }
+
+            // Trajectories
+            sagaCurrentTaskType = current && current.task_type ? current.task_type : null;
+            if (data.trajectories.length > 0) {
+                trajDiv.style.display = '';
+                trajList.innerHTML = '';
+                for (const t of data.trajectories) {
+                    const rewardCls = t.reward > 0 ? 'traj-reward-pos' : (t.reward < 0 ? 'traj-reward-neg' : 'traj-reward-zero');
+                    const tc = document.createElement('div');
+                    tc.className = 'traj-card';
+                    tc.innerHTML = `
+                        <div class="traj-action">${t.action}</div>
+                        <div class="traj-meta">
+                            <span class="${rewardCls}">Reward: ${t.reward > 0 ? '+' : ''}${t.reward}</span>
+                            &middot; ${t.result} &middot; ${t.timestamp}
+                        </div>
+                    `;
+                    trajList.appendChild(tc);
+                }
+                distillBtn.style.display = sagaCurrentTaskType ? '' : 'none';
+            } else {
+                trajDiv.style.display = 'none';
+                distillBtn.style.display = 'none';
+            }
+        }
+
+        async function sagaDistill() {
+            if (!sagaCurrentTaskType) return;
+            const btn = document.getElementById('saga-distill-btn');
+            btn.textContent = 'Distilling...';
+            btn.disabled = true;
+            try {
+                const res = await fetch(`${API_BASE}/api/saga/distill`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_type: sagaCurrentTaskType }),
+                });
+                const data = await res.json();
+                if (data.exit_code === 0) {
+                    btn.textContent = 'Distilled!';
+                } else {
+                    btn.textContent = 'Distill Failed';
+                }
+            } catch (_) {
+                btn.textContent = 'Error';
+            }
+            setTimeout(() => { btn.textContent = 'Distill Skill'; btn.disabled = false; }, 3000);
         }
 
         // ── Events log ────────────────────────────────────────

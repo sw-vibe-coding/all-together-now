@@ -53,6 +53,11 @@ pub async fn agentrail_complete(
     Ok(())
 }
 
+/// Run `agentrail --saga <path> distill --task_type <type>` and return (stdout, exit_code).
+pub async fn agentrail_distill(saga_path: &Path, task_type: &str) -> Result<(String, i32)> {
+    run_agentrail(saga_path, &["distill", "--task_type", task_type]).await
+}
+
 async fn run_agentrail(saga_path: &Path, args: &[&str]) -> Result<(String, i32)> {
     let output = tokio::process::Command::new("agentrail")
         .arg("--saga")

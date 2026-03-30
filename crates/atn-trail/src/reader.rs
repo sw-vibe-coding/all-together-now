@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use atn_core::error::{AtnError, Result};
 
 const AGENTRAIL_DIR: &str = ".agentrail";
 
 /// Saga configuration as stored in `.agentrail/saga.toml`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SagaConfig {
     pub name: String,
     pub status: String,
@@ -17,7 +17,7 @@ pub struct SagaConfig {
 }
 
 /// Step configuration as stored in `.agentrail/steps/NNN-slug/step.toml`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct StepConfig {
     pub number: u32,
     pub slug: String,
@@ -35,7 +35,7 @@ pub struct StepConfig {
 }
 
 /// ICRL trajectory record.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Trajectory {
     pub task_type: String,
     pub state: serde_json::Value,

@@ -17,11 +17,14 @@ use tokio_stream::StreamExt as _;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::EnvFilter;
 
+use std::collections::HashMap;
+
 use atn_core::agent::{AgentId, AgentState};
 use atn_core::config::load_project_config;
 use atn_core::event::{InputEvent, OutputSignal, PushEvent};
 use atn_core::router::EventLogEntry;
 use atn_pty::manager::SessionManager;
+use atn_trail::reader::{SagaConfig, StepConfig, Trajectory};
 use atn_wiki::storage::FileWikiStorage;
 use wiki_common::async_storage::AsyncWikiStorage;
 use wiki_common::etag::content_etag;
@@ -34,6 +37,8 @@ struct SharedState {
     manager: Arc<Mutex<SessionManager>>,
     wiki: Arc<FileWikiStorage>,
     event_log: router::EventLog,
+    /// Resolved repo_path for each agent (for saga lookups).
+    agent_repo_paths: Arc<HashMap<String, PathBuf>>,
 }
 
 type AppState = SharedState;
@@ -87,6 +92,19 @@ struct SubmitEventBody {
     event: PushEvent,
 }
 
+/// Full saga overview returned from the saga endpoint.
+#[derive(Serialize)]
+struct SagaResponse {
+    saga: Option<SagaConfig>,
+    steps: Vec<StepConfig>,
+    trajectories: Vec<Trajectory>,
+}
+
+#[derive(Deserialize)]
+struct DistillBody {
+    task_type: String,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -134,6 +152,17 @@ async fn main() {
 
     let agent_ids: Vec<String> = manager.agent_ids().iter().map(|id| id.0.clone()).collect();
 
+    // Build repo_path map for saga lookups.
+    let agent_repo_paths: HashMap<String, PathBuf> = project_config
+        .agents
+        .iter()
+        .map(|entry| {
+            let config = entry.to_agent_config(&base_dir);
+            (entry.id.clone(), config.repo_path)
+        })
+        .collect();
+    let agent_repo_paths = Arc::new(agent_repo_paths);
+
     tracing::info!(
         "{} agent(s) running",
         manager.len()
@@ -164,6 +193,7 @@ async fn main() {
         manager,
         wiki,
         event_log,
+        agent_repo_paths,
     };
 
     let app = Router::new()
@@ -173,6 +203,9 @@ async fn main() {
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
         .route("/api/agents/{id}/state", get(agent_state))
+        .route("/api/saga", get(get_project_saga))
+        .route("/api/saga/distill", post(saga_distill))
+        .route("/api/agents/{id}/saga", get(get_agent_saga))
         .route("/api/events", get(list_events).post(submit_event))
         .route("/api/wiki", get(wiki_list_pages))
         .route(
@@ -315,6 +348,74 @@ async fn agent_ctrl_c(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
+}
+
+// ── Saga / Agentrail handlers ─────────────────────────────────────────
+
+/// Build a SagaResponse from a repo path (blocking I/O in spawn_blocking).
+async fn saga_for_path(repo_path: PathBuf) -> SagaResponse {
+    tokio::task::spawn_blocking(move || {
+        let saga = atn_trail::reader::load_saga(&repo_path)
+            .ok()
+            .flatten();
+        let steps = atn_trail::reader::list_steps(&repo_path).unwrap_or_default();
+        let task_type = steps
+            .iter()
+            .find(|s| s.status == "in-progress")
+            .and_then(|s| s.task_type.as_deref())
+            .unwrap_or("");
+        let trajectories = if task_type.is_empty() {
+            vec![]
+        } else {
+            atn_trail::reader::load_trajectories(&repo_path, task_type)
+                .unwrap_or_default()
+        };
+        SagaResponse {
+            saga,
+            steps,
+            trajectories,
+        }
+    })
+    .await
+    .unwrap_or_else(|_| SagaResponse {
+        saga: None,
+        steps: vec![],
+        trajectories: vec![],
+    })
+}
+
+/// Get saga info for the project (uses cwd).
+async fn get_project_saga() -> Json<SagaResponse> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    Json(saga_for_path(cwd).await)
+}
+
+/// Get saga info for a specific agent's repo.
+async fn get_agent_saga(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<Json<SagaResponse>, StatusCode> {
+    let repo_path = state
+        .agent_repo_paths
+        .get(&id)
+        .ok_or(StatusCode::NOT_FOUND)?
+        .clone();
+    Ok(Json(saga_for_path(repo_path).await))
+}
+
+/// Trigger skill distillation for a task type.
+async fn saga_distill(
+    Json(body): Json<DistillBody>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let saga_path = cwd.join(".agentrail");
+    let (output, code) = atn_trail::cli::agentrail_distill(&saga_path, &body.task_type)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "exit_code": code,
+        "output": output,
+    })))
 }
 
 // ── Wiki handlers ──────────────────────────────────────────────────────
