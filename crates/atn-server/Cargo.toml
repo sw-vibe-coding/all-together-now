@@ -8,6 +8,7 @@ atn-core = { workspace = true }
 atn-pty = { workspace = true }
 atn-wiki = { workspace = true }
 atn-trail = { workspace = true }
+wiki-common = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
 futures-core = { workspace = true }

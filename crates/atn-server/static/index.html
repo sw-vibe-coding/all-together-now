@@ -47,14 +47,77 @@
         .conn-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .conn-dot.connected { background: #4ecca3; }
         .conn-dot.disconnected { background: #e94560; }
+
+        /* View tabs */
+        .view-tabs { display: flex; gap: 4px; margin-left: auto; }
+        .view-tab { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
+        .view-tab.active { background: #0f3460; color: #e0e0e0; }
+        .view-tab:hover { color: #e0e0e0; }
+
+        /* Wiki browser */
+        .wiki-container { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+        .wiki-sidebar { width: 220px; border-right: 1px solid #0f3460; overflow-y: auto; padding: 8px 0; flex-shrink: 0; }
+        .wiki-sidebar h3 { font-size: 12px; color: #888; padding: 4px 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .wiki-page-item { padding: 6px 12px; cursor: pointer; font-size: 13px; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .wiki-page-item:hover { background: #1e3a5f; }
+        .wiki-page-item.active { background: #0f3460; color: #e94560; }
+        .wiki-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+        .wiki-toolbar { padding: 8px 12px; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .wiki-toolbar .page-title { font-size: 14px; font-weight: 600; color: #c9d1d9; flex: 1; }
+        .wiki-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+        .wiki-toolbar button:hover { background: #0f3460; }
+        .wiki-toolbar button.btn-save { background: #4ecca3; color: #1a1a2e; border-color: #4ecca3; }
+        .wiki-toolbar button.btn-save:hover { background: #3db892; }
+        .wiki-content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+        .wiki-content h1, .wiki-content h2, .wiki-content h3 { color: #c9d1d9; margin: 16px 0 8px; }
+        .wiki-content h1 { font-size: 22px; border-bottom: 1px solid #0f3460; padding-bottom: 6px; }
+        .wiki-content h2 { font-size: 18px; }
+        .wiki-content p { margin: 8px 0; line-height: 1.6; }
+        .wiki-content ul, .wiki-content ol { margin: 8px 0; padding-left: 24px; }
+        .wiki-content a.wiki-link { color: #4ecca3; text-decoration: none; cursor: pointer; }
+        .wiki-content a.wiki-link:hover { text-decoration: underline; }
+        .wiki-edit-area { flex: 1; display: flex; flex-direction: column; padding: 8px; min-height: 0; }
+        .wiki-edit-area textarea { flex: 1; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 12px; resize: none; outline: none; }
+        .wiki-edit-area textarea:focus { border-color: #e94560; }
+        .wiki-conflict { background: #7f1d1d; border: 1px solid #f87171; border-radius: 4px; padding: 10px 14px; margin: 8px; color: #fca5a5; font-size: 13px; }
+        .wiki-new-page { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #0f3460; }
+        .wiki-new-page input { flex: 1; padding: 4px 8px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
+        .wiki-new-page button { padding: 4px 10px; background: #4ecca3; color: #1a1a2e; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
     </style>
 </head>
 <body>
     <header>
         <h1>All Together Now</h1>
         <span class="agent-count" id="agent-count"></span>
+        <div class="view-tabs">
+            <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
+            <button class="view-tab" id="tab-wiki" onclick="switchView('wiki')">Wiki</button>
+        </div>
     </header>
     <div class="dashboard" id="dashboard"></div>
+    <div class="wiki-container" id="wiki-view" style="display:none;">
+        <div class="wiki-sidebar">
+            <h3>Pages</h3>
+            <div id="wiki-page-list"></div>
+            <div class="wiki-new-page">
+                <input type="text" id="wiki-new-title" placeholder="New page title...">
+                <button onclick="wikiNewPage()">+</button>
+            </div>
+        </div>
+        <div class="wiki-main">
+            <div class="wiki-toolbar">
+                <span class="page-title" id="wiki-page-title">Select a page</span>
+                <button id="wiki-edit-btn" onclick="wikiToggleEdit()" style="display:none;">Edit</button>
+                <button id="wiki-save-btn" class="btn-save" onclick="wikiSave()" style="display:none;">Save</button>
+                <button id="wiki-cancel-btn" onclick="wikiCancelEdit()" style="display:none;">Cancel</button>
+            </div>
+            <div id="wiki-conflict" class="wiki-conflict" style="display:none;"></div>
+            <div class="wiki-content" id="wiki-content"></div>
+            <div class="wiki-edit-area" id="wiki-edit-area" style="display:none;">
+                <textarea id="wiki-editor"></textarea>
+            </div>
+        </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
@@ -235,6 +298,132 @@
         }
 
         init();
+
+        // ── View switching ─────────────────────────────────
+        function switchView(view) {
+            document.getElementById('dashboard').style.display = view === 'agents' ? '' : 'none';
+            document.getElementById('wiki-view').style.display = view === 'wiki' ? '' : 'none';
+            document.getElementById('tab-agents').className = 'view-tab' + (view === 'agents' ? ' active' : '');
+            document.getElementById('tab-wiki').className = 'view-tab' + (view === 'wiki' ? ' active' : '');
+            if (view === 'wiki') wikiLoadPageList();
+        }
+
+        // ── Wiki state ─────────────────────────────────────
+        let wikiCurrentPage = null;
+        let wikiCurrentEtag = null;
+        let wikiEditing = false;
+
+        async function wikiLoadPageList() {
+            try {
+                const res = await fetch(`${API_BASE}/api/wiki`);
+                const pages = await res.json();
+                const list = document.getElementById('wiki-page-list');
+                list.innerHTML = '';
+                for (const title of pages) {
+                    const item = document.createElement('div');
+                    item.className = 'wiki-page-item' + (title === wikiCurrentPage ? ' active' : '');
+                    item.textContent = title.replace(/__/g, '/');
+                    item.onclick = () => wikiOpenPage(title);
+                    list.appendChild(item);
+                }
+            } catch (_) {}
+        }
+
+        async function wikiOpenPage(title) {
+            wikiEditing = false;
+            try {
+                const res = await fetch(`${API_BASE}/api/wiki/${encodeURIComponent(title)}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                wikiCurrentPage = title;
+                wikiCurrentEtag = res.headers.get('ETag');
+
+                document.getElementById('wiki-page-title').textContent = data.title;
+                document.getElementById('wiki-content').innerHTML = data.html;
+                document.getElementById('wiki-content').style.display = '';
+                document.getElementById('wiki-edit-area').style.display = 'none';
+                document.getElementById('wiki-edit-btn').style.display = '';
+                document.getElementById('wiki-save-btn').style.display = 'none';
+                document.getElementById('wiki-cancel-btn').style.display = 'none';
+                document.getElementById('wiki-conflict').style.display = 'none';
+                document.getElementById('wiki-editor').value = data.content;
+
+                // Wire up wiki-link clicks
+                document.querySelectorAll('#wiki-content a.wiki-link').forEach(a => {
+                    a.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const target = a.getAttribute('data-wiki-link');
+                        if (target) wikiOpenPage(target);
+                    });
+                });
+
+                wikiLoadPageList();
+            } catch (_) {}
+        }
+
+        function wikiToggleEdit() {
+            wikiEditing = true;
+            document.getElementById('wiki-content').style.display = 'none';
+            document.getElementById('wiki-edit-area').style.display = 'flex';
+            document.getElementById('wiki-edit-btn').style.display = 'none';
+            document.getElementById('wiki-save-btn').style.display = '';
+            document.getElementById('wiki-cancel-btn').style.display = '';
+        }
+
+        function wikiCancelEdit() {
+            wikiEditing = false;
+            document.getElementById('wiki-content').style.display = '';
+            document.getElementById('wiki-edit-area').style.display = 'none';
+            document.getElementById('wiki-edit-btn').style.display = '';
+            document.getElementById('wiki-save-btn').style.display = 'none';
+            document.getElementById('wiki-cancel-btn').style.display = 'none';
+            document.getElementById('wiki-conflict').style.display = 'none';
+        }
+
+        async function wikiSave() {
+            if (!wikiCurrentPage) return;
+            const content = document.getElementById('wiki-editor').value;
+            const headers = { 'Content-Type': 'application/json' };
+            if (wikiCurrentEtag) headers['If-Match'] = wikiCurrentEtag;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/wiki/${encodeURIComponent(wikiCurrentPage)}`, {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ content }),
+                });
+                if (res.status === 409) {
+                    const data = await res.json();
+                    document.getElementById('wiki-conflict').textContent =
+                        `Conflict: page was modified by another user. Current version shown below. Your edits are preserved in the editor.`;
+                    document.getElementById('wiki-conflict').style.display = '';
+                    wikiCurrentEtag = data.current_etag;
+                    return;
+                }
+                if (res.ok) {
+                    wikiCurrentEtag = res.headers.get('ETag');
+                    wikiOpenPage(wikiCurrentPage);
+                }
+            } catch (_) {}
+        }
+
+        async function wikiNewPage() {
+            const input = document.getElementById('wiki-new-title');
+            const title = input.value.trim();
+            if (!title) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/wiki/${encodeURIComponent(title)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: `# ${title}\n\n` }),
+                });
+                if (res.ok || res.status === 201) {
+                    input.value = '';
+                    wikiOpenPage(title);
+                }
+            } catch (_) {}
+        }
     </script>
 </body>
 </html>

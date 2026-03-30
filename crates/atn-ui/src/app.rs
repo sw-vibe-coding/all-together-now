@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use yew::prelude::*;
 
+use crate::wiki::WikiBrowser;
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 struct AgentInfo {
     id: String,
@@ -8,10 +10,17 @@ struct AgentInfo {
     role: String,
 }
 
+#[derive(Clone, PartialEq)]
+enum ViewMode {
+    Agents,
+    Wiki,
+}
+
 #[function_component(App)]
 pub fn app() -> Html {
     let agents = use_state(Vec::<AgentInfo>::new);
     let selected = use_state(|| None::<String>);
+    let view = use_state(|| ViewMode::Agents);
 
     // Fetch agent list on mount.
     {
@@ -28,6 +37,16 @@ pub fn app() -> Html {
         })
     };
 
+    let on_view_agents = {
+        let view = view.clone();
+        Callback::from(move |_: MouseEvent| view.set(ViewMode::Agents))
+    };
+
+    let on_view_wiki = {
+        let view = view.clone();
+        Callback::from(move |_: MouseEvent| view.set(ViewMode::Wiki))
+    };
+
     let current_agent = (*selected)
         .clone()
         .or_else(|| agents.first().map(|a| a.id.clone()));
@@ -39,29 +58,43 @@ pub fn app() -> Html {
                 <span class="agent-count">
                     { format!("{} agent{}", agents.len(), if agents.len() != 1 { "s" } else { "" }) }
                 </span>
+                <div class="view-tabs">
+                    <button
+                        class={classes!("view-tab", (*view == ViewMode::Agents).then_some("active"))}
+                        onclick={on_view_agents}
+                    >{ "Agents" }</button>
+                    <button
+                        class={classes!("view-tab", (*view == ViewMode::Wiki).then_some("active"))}
+                        onclick={on_view_wiki}
+                    >{ "Wiki" }</button>
+                </div>
             </header>
-            <nav class="agent-tabs">
-                { for agents.iter().map(|a| {
-                    let id = a.id.clone();
-                    let is_active = current_agent.as_deref() == Some(&a.id);
-                    let on_click = {
-                        let on_select = on_select.clone();
-                        let id = id.clone();
-                        Callback::from(move |_: MouseEvent| on_select.emit(id.clone()))
-                    };
-                    html! {
-                        <button
-                            class={classes!("tab", is_active.then_some("active"))}
-                            onclick={on_click}
-                        >
-                            { &a.name }
-                            <span class="tab-role">{ &a.role }</span>
-                        </button>
-                    }
-                })}
-            </nav>
-            if let Some(agent_id) = current_agent {
-                <AgentPanel id={agent_id} />
+            if *view == ViewMode::Agents {
+                <nav class="agent-tabs">
+                    { for agents.iter().map(|a| {
+                        let id = a.id.clone();
+                        let is_active = current_agent.as_deref() == Some(&a.id);
+                        let on_click = {
+                            let on_select = on_select.clone();
+                            let id = id.clone();
+                            Callback::from(move |_: MouseEvent| on_select.emit(id.clone()))
+                        };
+                        html! {
+                            <button
+                                class={classes!("tab", is_active.then_some("active"))}
+                                onclick={on_click}
+                            >
+                                { &a.name }
+                                <span class="tab-role">{ &a.role }</span>
+                            </button>
+                        }
+                    })}
+                </nav>
+                if let Some(agent_id) = current_agent {
+                    <AgentPanel id={agent_id} />
+                }
+            } else {
+                <WikiBrowser />
             }
         </div>
     }
