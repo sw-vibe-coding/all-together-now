@@ -4,4 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-# Yew and web dependencies will be added in Phase 2
+yew = { version = "0.21", features = ["csr"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "EventSource",
+    "MessageEvent",
+    "HtmlInputElement",
+] }
+gloo-net = { version = "0.6", features = ["http"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,1 +1,3 @@
-// Yew UI components — Phase 2.
+mod app;
+
+pub use app::App;

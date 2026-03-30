@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>All Together Now</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+        header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 12px; }
+        header h1 { font-size: 18px; font-weight: 600; color: #e94560; }
+        header .agent-label { font-size: 14px; color: #aaa; }
+        header .status { font-size: 12px; padding: 2px 8px; border-radius: 4px; background: #0f3460; color: #4ecca3; }
+        .panel { flex: 1; display: flex; flex-direction: column; padding: 12px; gap: 8px; min-height: 0; }
+        #terminal-container { flex: 1; min-height: 0; border-radius: 6px; overflow: hidden; background: #000; }
+        .controls { display: flex; gap: 8px; align-items: center; }
+        .controls input { flex: 1; padding: 8px 12px; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 14px; outline: none; }
+        .controls input:focus { border-color: #e94560; }
+        .controls button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn-send { background: #4ecca3; color: #1a1a2e; }
+        .btn-send:hover { background: #3db892; }
+        .btn-ctrl-c { background: #e94560; color: #fff; }
+        .btn-ctrl-c:hover { background: #d63851; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>All Together Now</h1>
+        <span class="agent-label" id="agent-name">demo</span>
+        <span class="status" id="agent-status">connecting...</span>
+    </header>
+    <div class="panel">
+        <div id="terminal-container"></div>
+        <div class="controls">
+            <input type="text" id="input-box" placeholder="Type a command..." autofocus>
+            <button class="btn-send" id="btn-send">Send</button>
+            <button class="btn-ctrl-c" id="btn-ctrl-c">Ctrl-C</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script>
+        const AGENT_ID = 'demo';
+        const API_BASE = '';
+
+        // Initialize xterm.js
+        const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+            theme: {
+                background: '#0d1117',
+                foreground: '#c9d1d9',
+                cursor: '#e94560',
+                selectionBackground: '#264f78',
+            },
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+
+        const container = document.getElementById('terminal-container');
+        term.open(container);
+        fitAddon.fit();
+
+        window.addEventListener('resize', () => fitAddon.fit());
+        new ResizeObserver(() => fitAddon.fit()).observe(container);
+
+        // SSE connection for terminal output
+        function connectSSE() {
+            const status = document.getElementById('agent-status');
+            const evtSource = new EventSource(`${API_BASE}/api/agents/${AGENT_ID}/sse`);
+
+            evtSource.onopen = () => {
+                status.textContent = 'connected';
+                status.style.color = '#4ecca3';
+            };
+
+            evtSource.onmessage = (event) => {
+                const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
+                term.write(bytes);
+            };
+
+            evtSource.onerror = () => {
+                status.textContent = 'disconnected';
+                status.style.color = '#e94560';
+                evtSource.close();
+                setTimeout(connectSSE, 2000);
+            };
+        }
+        connectSSE();
+
+        // Send input
+        async function sendInput(text) {
+            await fetch(`${API_BASE}/api/agents/${AGENT_ID}/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text }),
+            });
+        }
+
+        // Send Ctrl-C
+        async function sendCtrlC() {
+            await fetch(`${API_BASE}/api/agents/${AGENT_ID}/ctrl-c`, {
+                method: 'POST',
+            });
+        }
+
+        // UI event handlers
+        const inputBox = document.getElementById('input-box');
+        const btnSend = document.getElementById('btn-send');
+        const btnCtrlC = document.getElementById('btn-ctrl-c');
+
+        btnSend.addEventListener('click', () => {
+            const text = inputBox.value;
+            if (text) {
+                sendInput(text);
+                inputBox.value = '';
+            }
+            inputBox.focus();
+        });
+
+        inputBox.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const text = inputBox.value;
+                if (text) {
+                    sendInput(text);
+                    inputBox.value = '';
+                }
+            }
+        });
+
+        btnCtrlC.addEventListener('click', () => {
+            sendCtrlC();
+            inputBox.focus();
+        });
+    </script>
+</body>
+</html>

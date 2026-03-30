@@ -136,6 +136,11 @@ impl PtySession {
         &self.agent_id
     }
 
+    /// Get a clone of the input sender for this session.
+    pub fn input_sender(&self) -> mpsc::Sender<InputEvent> {
+        self.input_tx.clone()
+    }
+
     /// Send an input event to the agent's PTY.
     pub async fn send_input(&self, event: InputEvent) -> Result<()> {
         self.input_tx
