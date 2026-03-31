@@ -1,0 +1,15 @@
+[2m2026-03-30T23:20:38.551866Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m All Together Now — PGM server starting
+[2m2026-03-30T23:20:38.554786Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Spawned agent: dev (Dev (Lead))
+[2m2026-03-30T23:20:38.555531Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Spawned agent: feature (Feature (Developer))
+[2m2026-03-30T23:20:38.555556Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m 2 agent(s) running
+[2m2026-03-30T23:20:38.557232Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Wiki storage initialized at .atn/wiki
+[2m2026-03-30T23:20:38.557617Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Message router started (polling every 2s)
+[2m2026-03-30T23:20:38.558207Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Watching agents.toml for changes
+[2m2026-03-30T23:20:38.558528Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Listening on http://0.0.0.0:7500
+[2m2026-03-30T23:21:00.577705Z[0m [32m INFO[0m [2matn_server::router[0m[2m:[0m Router: event evt-add-farewell from dev → Some("feature")
+[2m2026-03-30T23:21:00.577971Z[0m [32m INFO[0m [2matn_server::router[0m[2m:[0m Router: delivered event evt-add-farewell to agent feature
+[2m2026-03-30T23:21:32.597768Z[0m [32m INFO[0m [2matn_server::router[0m[2m:[0m Router: event evt-farewell-done from feature → Some("dev")
+[2m2026-03-30T23:21:32.598044Z[0m [32m INFO[0m [2matn_server::router[0m[2m:[0m Router: delivered event evt-farewell-done to agent dev
+[2m2026-03-30T23:21:33.098880Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Received SIGTERM, starting graceful shutdown
+[2m2026-03-30T23:21:33.098940Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m Shutting down all agent sessions...
+[2m2026-03-30T23:21:39.212829Z[0m [32m INFO[0m [2matn_server[0m[2m:[0m All agents shut down. Goodbye.

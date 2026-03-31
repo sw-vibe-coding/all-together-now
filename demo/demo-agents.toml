@@ -1,0 +1,17 @@
+[project]
+name = "atn-demo"
+log_dir = ".atn/logs"
+
+[[agent]]
+id = "dev"
+name = "Dev (Lead)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"
+
+[[agent]]
+id = "feature"
+name = "Feature (Developer)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"

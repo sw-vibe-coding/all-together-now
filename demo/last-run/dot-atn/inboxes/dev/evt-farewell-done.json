@@ -1,0 +1,16 @@
+{
+  "event": {
+    "id": "evt-farewell-done",
+    "kind": "completion_notice",
+    "source_agent": "feature",
+    "source_repo": ".",
+    "target_agent": "dev",
+    "issue_id": null,
+    "summary": "farewell subcommand added to app.py and tested",
+    "wiki_link": null,
+    "priority": "normal",
+    "timestamp": "2026-03-30T23:21:31Z"
+  },
+  "delivered": true,
+  "delivered_at": "2026-03-30T23:21:32.597810+00:00"
+}

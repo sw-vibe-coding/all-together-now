@@ -1,0 +1,76 @@
+<style>
+
+  .atn-terminal {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    white-space: pre;
+    display: inline-block;
+    min-width: 600px;
+    overflow-x: auto;
+  }
+  .atn-terminal-header {
+    display: flex; align-items: center;
+    margin-bottom: 10px; padding-bottom: 8px;
+    border-bottom: 1px solid #21262d;
+  }
+  .atn-dot { width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .atn-dot-red { background:#ff5f56; }
+  .atn-dot-yellow { background:#ffbd2e; }
+  .atn-dot-green { background:#27c93f; }
+  .atn-terminal-title { color: #8b949e; font-size: 11px; margin-left: 12px; }
+</style>
+<div class="atn-terminal">
+  <div class="atn-terminal-header">
+    <span class="atn-dot atn-dot-red"></span>
+    <span class="atn-dot atn-dot-yellow"></span>
+    <span class="atn-dot atn-dot-green"></span>
+    <span class="atn-terminal-title">Feature Agent — Added farewell to app.py</span>
+  </div>
+     print(f"Hello, {args.name}!")
+
++def farewell_handler(args):
++    print(f"Goodbye, {args.name}!")
++
+ def main():
+     parser = argparse.ArgumentParser(description="CLI app with greet subcommand")
+     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+     greet_parser = subparsers.add_parser("greet", help="Greet someone")
+     greet_parser.add_argument("name", help="Name to greet")
+     greet_parser.set_defaults(func=greet_handler)
+
++    farewell_parser = subparsers.add_parser("farewell", help="Say farewell to someone")
++    farewell_parser.add_argument("name", help="Name to say farewell to")
++    farewell_parser.set_defaults(func=farewell_handler)
++
+     args = parser.parse_args()
+
+     if args.command:
+         args.func(args)
+
+
+$ python3 app.py greet Alice
+Hello, Alice!
+
+Let me test the updated code to make sure both commands work:
+
+$ python3 app.py farewell Alice
+Goodbye, Alice!
+
+Perfect! Both commands work as expected. The `greet` command still prints "Hello, Alice!" and the new `farewell` command
+ prints "Goodbye, Alice!"
+
+__ATN_READY__&gt; python3 app.py greet World &amp;&amp; python3 app.py farewell World
+Hello, World!
+Goodbye, World!
+__ATN_READY__&gt;
+__ATN_READY__&gt;
+__ATN_READY__&gt;
+</div>

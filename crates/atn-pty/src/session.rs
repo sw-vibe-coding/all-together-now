@@ -77,9 +77,17 @@ impl PtySession {
         let state = Arc::new(RwLock::new(AgentState::Starting));
 
         let reader_handle = spawn_reader_task(reader, output_tx.clone());
-        let writer_handle = spawn_writer_task(writer, input_rx);
 
-        // Optionally start transcript logging.
+        // Optionally start transcript logging (output + input).
+        let input_log_path = if let Some(ref dir) = log_dir {
+            let agent_dir = dir.join(&config.id.0);
+            let _ = std::fs::create_dir_all(&agent_dir);
+            Some(agent_dir.join("inputs.jsonl"))
+        } else {
+            None
+        };
+        let writer_handle = spawn_writer_task(writer, input_rx, input_log_path);
+
         let transcript_handle = if let Some(dir) = log_dir {
             let agent_dir = dir.join(&config.id.0);
             let tw = TranscriptWriter::new(&agent_dir)?;

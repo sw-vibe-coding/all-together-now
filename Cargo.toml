@@ -7,6 +7,7 @@ members = [
     "crates/atn-ui",
     "crates/atn-wiki",
     "crates/atn-trail",
+    "crates/atn-replay",
 ]
 
 [workspace.package]

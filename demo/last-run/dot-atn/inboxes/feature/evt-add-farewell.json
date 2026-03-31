@@ -1,0 +1,16 @@
+{
+  "event": {
+    "id": "evt-add-farewell",
+    "kind": "feature_request",
+    "source_agent": "dev",
+    "source_repo": ".",
+    "target_agent": "feature",
+    "issue_id": null,
+    "summary": "Add a farewell subcommand to app.py: python app.py farewell Alice prints Goodbye, Alice!",
+    "wiki_link": null,
+    "priority": "high",
+    "timestamp": "2026-03-30T23:20:59Z"
+  },
+  "delivered": true,
+  "delivered_at": "2026-03-30T23:21:00.577746+00:00"
+}

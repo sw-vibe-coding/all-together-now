@@ -1,0 +1,76 @@
+<style>
+
+  .atn-terminal {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    white-space: pre;
+    display: inline-block;
+    min-width: 600px;
+    overflow-x: auto;
+  }
+  .atn-terminal-header {
+    display: flex; align-items: center;
+    margin-bottom: 10px; padding-bottom: 8px;
+    border-bottom: 1px solid #21262d;
+  }
+  .atn-dot { width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .atn-dot-red { background:#ff5f56; }
+  .atn-dot-yellow { background:#ffbd2e; }
+  .atn-dot-green { background:#27c93f; }
+  .atn-terminal-title { color: #8b949e; font-size: 11px; margin-left: 12px; }
+</style>
+<div class="atn-terminal">
+  <div class="atn-terminal-header">
+    <span class="atn-dot atn-dot-red"></span>
+    <span class="atn-dot atn-dot-yellow"></span>
+    <span class="atn-dot atn-dot-green"></span>
+    <span class="atn-terminal-title">Dev Agent — Created app.py with greet</span>
+  </div>
+To update your account to use zsh, please run `chsh -s /bin/zsh`.
+For more details, please visit https://support.apple.com/kb/HT208050.
+__ATN_READY__&gt; printf '%s' '{"*":"allow"}' &gt; /tmp/.atn-oc-perm
+__ATN_READY__&gt; export OPENCODE_PERMISSION=`cat /tmp/.atn-oc-perm`
+__ATN_READY__&gt; opencode run -m deepseek/deepseek-chat "Create a Python CLI app in app.py using argparse with one subcomm
+and: greet. python3 app.py greet Alice should print Hello, Alice! Include a main guard. Just the file, no explanation."
+
+&gt; build · deepseek-chat
+
+I'll create the Python CLI app with argparse and a greet subcommand.
+
+← Write app.py
+Wrote file successfully.
+
+$ python3 app.py greet Alice
+Hello, Alice!
+
+$ python3 app.py
+usage: app.py [-h] {greet} ...
+
+CLI app with greet subcommand
+
+positional arguments:
+  {greet}     Available commands
+    greet     Greet someone
+
+options:
+  -h, --help  show this help message and exit
+
+The CLI app is created and working correctly.
+
+__ATN_READY__&gt; python3 app.py greet World
+Hello, World!
+__ATN_READY__&gt; #
+__ATN_READY__&gt; [ATN] Message from feature: farewell subcommand added to app.py and tested (priority: Normal)
+bash: syntax error near unexpected token `('
+__ATN_READY__&gt;
+__ATN_READY__&gt;
+__ATN_READY__&gt;
+__ATN_READY__&gt;
+</div>

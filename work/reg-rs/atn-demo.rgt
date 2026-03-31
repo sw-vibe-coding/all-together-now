@@ -1,0 +1,6 @@
+command = "cd /Users/mike/github/sw-vibe-coding/all-together-now && bash demo/run-demo.sh"
+timeout = 180
+exit_code = 0
+desc = "End-to-end multi-agent AI coordination demo"
+expects = "Two agents coordinate via ATN message routing with 3 AI interactions"
+flaky_note = "Depends on AI API latency; increase ATN_AI_WAIT if flaky"
