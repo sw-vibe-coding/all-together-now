@@ -166,8 +166,19 @@ async fn process_outbox_file(
                     .map(|s| s.input_sender())
             };
             if let Some(tx) = tx {
+                // Send text first, then Enter as a separate event after a
+                // delay. TUI apps (bubbletea/opencode) use bracketed paste
+                // mode — a \r inside a bulk write is treated as literal text,
+                // not "submit". Splitting into two events with a pause between
+                // them exits paste mode before the Enter arrives.
                 let _ = tx
                     .send(InputEvent::HumanText { text: prompt })
+                    .await;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let _ = tx
+                    .send(InputEvent::RawBytes {
+                        bytes: vec![0x0d], // \r = Enter
+                    })
                     .await;
             }
             delivered = true;

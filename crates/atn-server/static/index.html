@@ -441,10 +441,16 @@
             function doSend() {
                 const text = input.value;
                 if (text) {
+                    // Send text, then Enter as separate raw bytes after a
+                    // short delay so TUI apps exit bracketed paste mode first.
                     fetch(`${API_BASE}/api/agents/${agentId}/input`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ text }),
+                    }).then(() => {
+                        setTimeout(() => {
+                            sendRawBytes(agentId, [13]); // \r = Enter
+                        }, 100);
                     });
                     input.value = '';
                 }
