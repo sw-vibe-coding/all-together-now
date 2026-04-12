@@ -92,6 +92,10 @@
         .events-toolbar h2 { font-size: 16px; color: #c9d1d9; flex: 1; }
         .events-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
         .events-toolbar button:hover { background: #0f3460; }
+        .events-columns { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 0; overflow: hidden; }
+        .events-column { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        .events-column-header { font-size: 13px; font-weight: 600; color: #c9d1d9; padding: 6px 10px; background: #16213e; border: 1px solid #0f3460; border-radius: 6px 6px 0 0; flex-shrink: 0; }
+        .events-column-header .col-arrow { margin: 0 4px; color: #e94560; }
         .events-list { flex: 1; overflow-y: auto; }
         .event-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; }
         .event-card .event-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -291,7 +295,16 @@
             <button onclick="eventsRefresh()">Refresh</button>
         </div>
         <div id="events-escalations"></div>
-        <div class="events-list" id="events-list"></div>
+        <div class="events-columns">
+            <div class="events-column">
+                <div class="events-column-header">Coordinator <span class="col-arrow">&rarr;</span> Agents</div>
+                <div class="events-list" id="events-outbound"></div>
+            </div>
+            <div class="events-column">
+                <div class="events-column-header">Agents <span class="col-arrow">&rarr;</span> Coordinator</div>
+                <div class="events-list" id="events-inbound"></div>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -1061,9 +1074,11 @@
                 const res = await fetch(`${API_BASE}/api/events?since=0`);
                 if (!res.ok) return;
                 const entries = await res.json();
-                const list = document.getElementById('events-list');
+                const outbound = document.getElementById('events-outbound');
+                const inbound = document.getElementById('events-inbound');
                 const escDiv = document.getElementById('events-escalations');
-                list.innerHTML = '';
+                outbound.innerHTML = '';
+                inbound.innerHTML = '';
                 escDiv.innerHTML = '';
 
                 // Show escalations at the top
@@ -1077,7 +1092,7 @@
                     escDiv.appendChild(banner);
                 }
 
-                // Show all events newest-first
+                // Split events into outbound (to non-coordinator) and inbound (to coordinator)
                 for (let i = entries.length - 1; i >= 0; i--) {
                     const entry = entries[i];
                     const ev = entry.event;
@@ -1092,10 +1107,10 @@
                         <div class="event-meta">
                             <span>From: ${ev.source_agent}</span>
                             <span>Target: ${ev.target_agent || '(broadcast)'}</span>
-                            <span>Priority: ${ev.priority}</span>
-                            <span>${entry.logged_at}</span>
+                            <span>${entry.logged_at.slice(11, 19)}</span>
                         </div>`;
-                    list.appendChild(card);
+                    const isInbound = ev.target_agent === 'coordinator';
+                    (isInbound ? inbound : outbound).appendChild(card);
                 }
                 eventsLastIndex = entries.length;
             } catch (_) {}

@@ -250,8 +250,17 @@ async fn main() {
         .with_state(state.clone());
 
     let addr = "0.0.0.0:7500";
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(
+                "Cannot bind to {addr}: {e}. Another atn-server is probably running. \
+                 Kill it first with: pkill -f atn-server"
+            );
+            std::process::exit(1);
+        }
+    };
     tracing::info!("Listening on http://{addr}");
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
 
     let manager_for_shutdown = state.manager.clone();
     axum::serve(listener, app)
