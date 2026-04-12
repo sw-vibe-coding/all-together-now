@@ -261,6 +261,7 @@
         <div class="wiki-main">
             <div class="wiki-toolbar">
                 <span class="page-title" id="wiki-page-title">Select a page</span>
+                <a id="wiki-open-link" href="/wiki" target="_blank" style="display:none; font-size:12px; color:#58a6ff; text-decoration:none; margin-right:8px;">Open in Wiki ↗</a>
                 <button id="wiki-edit-btn" onclick="wikiToggleEdit()" style="display:none;">Edit</button>
                 <button id="wiki-save-btn" class="btn-save" onclick="wikiSave()" style="display:none;">Save</button>
                 <button id="wiki-cancel-btn" onclick="wikiCancelEdit()" style="display:none;">Cancel</button>
@@ -828,6 +829,9 @@
                 document.getElementById('wiki-content').style.display = '';
                 document.getElementById('wiki-edit-area').style.display = 'none';
                 document.getElementById('wiki-edit-btn').style.display = '';
+                var openLink = document.getElementById('wiki-open-link');
+                openLink.href = '/wiki/' + encodeURIComponent(data.title);
+                openLink.style.display = '';
                 document.getElementById('wiki-save-btn').style.display = 'none';
                 document.getElementById('wiki-cancel-btn').style.display = 'none';
                 document.getElementById('wiki-conflict').style.display = 'none';

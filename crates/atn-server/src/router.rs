@@ -167,15 +167,9 @@ async fn process_outbox_file(
             };
             if let Some(tx) = tx {
                 // Send text, pause, then Enter as separate events.
-                let _ = tx
-                    .send(InputEvent::HumanText { text: prompt })
-                    .await;
+                let _ = tx.send(InputEvent::HumanText { text: prompt }).await;
                 tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                let _ = tx
-                    .send(InputEvent::RawBytes {
-                        bytes: vec![0x0d],
-                    })
-                    .await;
+                let _ = tx.send(InputEvent::RawBytes { bytes: vec![0x0d] }).await;
             }
             delivered = true;
             tracing::info!("Router: delivered event {} to agent {}", event.id, agent_id);

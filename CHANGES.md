@@ -1,5 +1,6 @@
 # Changes
 
+- Standalone wiki HTML UI: browsable wiki at /wiki with sidebar navigation, edit/create pages, classic wiki-links ([[Page Name]]) with red links for missing pages that open create forms on click, "Open in Wiki" link from the ATN Wiki tab; agent list sorting (coordinator always first in all views); "Open in Wiki" link in ATN tab toolbar
 - Phase 9: Interactive TUI agents + multi-saga UI + agent-to-agent delegation — PTY resize sync (browser↔PTY), TERM=xterm-256color for TUI apps, \r instead of \n for Enter in TUI mode, raw keystroke forwarding from xterm.js (arrows/Tab/Escape), raw_bytes input API, per-agent saga panels side-by-side in Saga tab, router delivers events as TUI prompts (not bash comments), outbox path fix for remote base_dir, submit_event uses base_dir
 - atn-replay crate: Rust CLI for rendering PTY transcript.log files; screenshot (--html standalone, --html-fragment for org embed), at (offset), steps (chunked), dashboard (org-mode for emacs auto-revert), list, text (plain)
 - Input logging: writer task logs all InputEvent to inputs.jsonl with RFC3339 timestamps for correlation with transcript.log

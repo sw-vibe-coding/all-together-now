@@ -246,6 +246,8 @@ async fn main() {
                 .patch(wiki_patch_page)
                 .delete(wiki_delete_page),
         )
+        .route("/wiki", get(wiki_html_index))
+        .route("/wiki/{*title}", get(wiki_html_page))
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
@@ -408,9 +410,7 @@ async fn agent_input(
             bytes: payload.raw_bytes,
         }
     } else {
-        InputEvent::HumanText {
-            text: payload.text,
-        }
+        InputEvent::HumanText { text: payload.text }
     };
     tx.send(event)
         .await
@@ -781,9 +781,14 @@ async fn agent_dependency_graph(State(state): State<AppState>) -> Json<Vec<DepGr
         mgr.agent_ids()
             .iter()
             .filter_map(|id| {
-                mgr.get_session(id)
-                    .ok()
-                    .map(|session| (id.0.clone(), session.name().to_string(), session.role().to_string(), session.state()))
+                mgr.get_session(id).ok().map(|session| {
+                    (
+                        id.0.clone(),
+                        session.name().to_string(),
+                        session.role().to_string(),
+                        session.state(),
+                    )
+                })
             })
             .collect()
     };
@@ -1180,6 +1185,312 @@ fn conflict_response(page: &WikiPage, current_etag: &str) -> Response {
     resp.headers_mut()
         .insert("ETag", current_etag.parse().unwrap());
     resp
+}
+
+// ── Wiki HTML handlers ────────────────────────────────────────────────
+
+/// Render a navigation sidebar listing all wiki pages.
+fn wiki_nav(pages: &[String], active: &str) -> String {
+    let mut nav = String::from(r#"<nav class="wiki-nav"><h2>Pages</h2><ul>"#);
+    for p in pages {
+        let cls = if p == active {
+            r#" class="active""#
+        } else {
+            ""
+        };
+        let display = p.replace("__", " / ");
+        nav.push_str(&format!(
+            r#"<li{cls}><a href="/wiki/{p}">{display}</a></li>"#
+        ));
+    }
+    nav.push_str(r#"</ul><a class="new-page-link" href="/wiki?action=new">+ New page</a></nav>"#);
+    nav
+}
+
+/// CSS shared across all wiki HTML pages.
+const WIKI_CSS: &str = r##"
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; background:#0a0e1a; color:#c9d1d9; display:flex; min-height:100vh; }
+  .wiki-nav { width:220px; background:#16213e; padding:16px; border-right:1px solid #0f3460; flex-shrink:0; overflow-y:auto; }
+  .wiki-nav h2 { font-size:14px; color:#e94560; margin-bottom:12px; text-transform:uppercase; letter-spacing:1px; }
+  .wiki-nav ul { list-style:none; }
+  .wiki-nav li { margin-bottom:4px; }
+  .wiki-nav a { color:#58a6ff; text-decoration:none; font-size:14px; display:block; padding:4px 8px; border-radius:4px; }
+  .wiki-nav a:hover { background:#0f3460; }
+  .wiki-nav li.active a { background:#0f3460; color:#e94560; font-weight:600; }
+  .new-page-link { display:block; margin-top:12px; padding:6px 8px; color:#34d399; font-size:13px; font-weight:600; }
+  .wiki-main { flex:1; padding:32px 48px; max-width:900px; overflow-y:auto; }
+  .wiki-main h1 { color:#e2e8f0; margin-bottom:16px; font-size:28px; border-bottom:1px solid #0f3460; padding-bottom:8px; }
+  .wiki-main h2 { color:#c9d1d9; margin:24px 0 8px; font-size:20px; }
+  .wiki-main h3 { color:#9ca3af; margin:16px 0 6px; font-size:16px; }
+  .wiki-main p { line-height:1.7; margin-bottom:12px; }
+  .wiki-main ul, .wiki-main ol { margin:8px 0 12px 24px; line-height:1.7; }
+  .wiki-main li { margin-bottom:4px; }
+  .wiki-main code { background:#1e293b; padding:2px 6px; border-radius:3px; font-size:0.9em; }
+  .wiki-main pre { background:#1e293b; padding:12px; border-radius:6px; overflow-x:auto; margin:12px 0; }
+  .wiki-main a { color:#58a6ff; text-decoration:none; }
+  .wiki-main a:hover { text-decoration:underline; }
+  .page-list { list-style:none; margin:0; }
+  .page-list li { padding:8px 12px; border-bottom:1px solid #1e293b; }
+  .page-list a { font-size:16px; }
+  .back-link { display:inline-block; margin-bottom:16px; color:#9ca3af; font-size:13px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:16px; align-items:center; }
+  .toolbar .back-link { margin-bottom:0; }
+  .btn { padding:6px 14px; border:1px solid #0f3460; border-radius:4px; background:transparent; color:#c9d1d9; cursor:pointer; font-size:13px; text-decoration:none; display:inline-block; }
+  .btn:hover { background:#0f3460; }
+  .btn-primary { background:#0f3460; color:#58a6ff; }
+  .btn-primary:hover { background:#1a4a7a; }
+  .spacer { flex:1; }
+  textarea.editor { width:100%; min-height:400px; background:#1e293b; color:#c9d1d9; border:1px solid #0f3460; border-radius:6px; padding:12px; font-family:'SF Mono',Monaco,monospace; font-size:14px; line-height:1.6; resize:vertical; }
+  textarea.editor:focus { outline:none; border-color:#58a6ff; }
+  input.title-input { background:#1e293b; color:#c9d1d9; border:1px solid #0f3460; border-radius:4px; padding:8px 12px; font-size:16px; width:100%; margin-bottom:12px; }
+  input.title-input:focus { outline:none; border-color:#58a6ff; }
+  .msg { padding:8px 12px; border-radius:4px; margin-bottom:12px; font-size:13px; }
+  .msg-err { background:#7f1d1d; color:#fca5a5; }
+  .msg-ok { background:#064e3b; color:#6ee7b7; }
+  .wiki-redlink { color:#e94560 !important; border-bottom:1px dashed #e94560; }
+  .wiki-redlink:hover { color:#ff6b81 !important; }
+  .create-hint { color:#9ca3af; font-style:italic; margin-bottom:16px; }
+"##;
+
+/// JS for the edit/create form — uses fetch to PUT via the JSON API.
+const WIKI_EDIT_JS: &str = r##"
+async function savePage(title, isNew) {
+    const content = document.getElementById('editor').value;
+    const etag = document.getElementById('etag')?.value || '';
+    const msgEl = document.getElementById('msg');
+    msgEl.textContent = '';
+    msgEl.className = 'msg';
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (etag) headers['If-Match'] = etag;
+
+    try {
+        const res = await fetch('/api/wiki/' + encodeURIComponent(title), {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({ content })
+        });
+        if (res.ok) {
+            window.location.href = '/wiki/' + encodeURIComponent(title);
+        } else {
+            const data = await res.json().catch(() => null);
+            const detail = data?.error || res.statusText;
+            msgEl.textContent = 'Save failed: ' + detail;
+            msgEl.className = 'msg msg-err';
+            // Update etag if server returned one (conflict recovery)
+            const newEtag = res.headers.get('ETag');
+            if (newEtag && document.getElementById('etag')) {
+                document.getElementById('etag').value = newEtag;
+            }
+        }
+    } catch (e) {
+        msgEl.textContent = 'Network error: ' + e.message;
+        msgEl.className = 'msg msg-err';
+    }
+}
+
+function createPage() {
+    const titleInput = document.getElementById('new-title');
+    let title = titleInput.value.trim();
+    if (!title) { titleInput.focus(); return; }
+    // Convert spaces/slashes to __ for wiki title format
+    title = title.replace(/[\s\/]+/g, '__');
+    savePage(title, true);
+}
+"##;
+
+/// Shared wiki page shell.
+fn wiki_html_shell(nav: &str, title: &str, body: &str, extra_js: &str) -> String {
+    format!(
+        r##"<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — ATN Wiki</title>
+<style>{WIKI_CSS}</style>
+</head><body>
+{nav}
+<main class="wiki-main">{body}</main>
+<script>{extra_js}</script>
+</body></html>"##
+    )
+}
+
+/// GET /wiki — index page listing all wiki pages, or new-page form.
+async fn wiki_html_index(
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let pages = state.wiki.list_pages().await;
+    let nav = wiki_nav(&pages, "");
+
+    if query.get("action").map(|s| s.as_str()) == Some("new") {
+        // New page form
+        let body = r#"<a class="back-link" href="/wiki">&larr; All pages</a>
+<h1>New Page</h1>
+<div id="msg" class="msg"></div>
+<input class="title-input" id="new-title" placeholder="Page title (use __ for subpages, e.g. Coordination__Notes)" autofocus>
+<textarea class="editor" id="editor" placeholder="Page content (markdown)"></textarea>
+<div class="toolbar" style="margin-top:12px;">
+  <button class="btn btn-primary" onclick="createPage()">Create</button>
+  <a class="btn" href="/wiki">Cancel</a>
+</div>"#;
+        return Html(wiki_html_shell(&nav, "New Page", body, WIKI_EDIT_JS));
+    }
+
+    let mut body = String::from(
+        r#"<div class="toolbar"><h1 style="flex:1">Wiki</h1><a class="btn btn-primary" href="/wiki?action=new">+ New page</a></div><ul class="page-list">"#,
+    );
+    for p in &pages {
+        let display = p.replace("__", " / ");
+        body.push_str(&format!(r#"<li><a href="/wiki/{p}">{display}</a></li>"#));
+    }
+    body.push_str("</ul>");
+    Html(wiki_html_shell(&nav, "Wiki", &body, ""))
+}
+
+/// Post-process rendered HTML to fix wiki-link hrefs and add red-link styling.
+/// The wiki-common renderer produces `<a class="wiki-link" data-wiki-link="Slug" href="#/wiki/Slug">`.
+/// We rewrite hrefs to `/wiki/Slug` and add red-link class for missing pages.
+fn wikify_links(html: &str, existing_pages: &[String]) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut rest = html;
+    let marker = r#"class="wiki-link" data-wiki-link=""#;
+    while let Some(pos) = rest.find(marker) {
+        // Find the start of the <a tag
+        let tag_start = rest[..pos].rfind("<a ").unwrap_or(pos);
+        result.push_str(&rest[..tag_start]);
+        let after_marker = &rest[pos + marker.len()..];
+        if let Some(quote_end) = after_marker.find('"') {
+            let slug = &after_marker[..quote_end];
+            let exists = existing_pages.iter().any(|p| p == slug);
+            let cls = if exists {
+                "wiki-link"
+            } else {
+                "wiki-link wiki-redlink"
+            };
+            // Find the rest of the tag after data-wiki-link="..."
+            let after_data = &after_marker[quote_end + 1..];
+            // Find href="..." and replace it
+            if let Some(href_start) = after_data.find("href=\"") {
+                let after_href = &after_data[href_start + 6..];
+                if let Some(href_end) = after_href.find('"') {
+                    let after_href_attr = &after_href[href_end + 1..];
+                    // Find the closing > of the <a> tag
+                    if let Some(tag_end) = after_href_attr.find('>') {
+                        let inner_and_rest = &after_href_attr[tag_end + 1..];
+                        // Find </a>
+                        if let Some(close) = inner_and_rest.find("</a>") {
+                            let inner = &inner_and_rest[..close];
+                            let title_attr = if exists {
+                                ""
+                            } else {
+                                r#" title="Create this page""#
+                            };
+                            result.push_str(&format!(
+                                r#"<a class="{cls}" href="/wiki/{slug}"{title_attr}>{inner}</a>"#
+                            ));
+                            rest = &inner_and_rest[close + 4..];
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Fallback: couldn't parse, keep original
+            result.push_str(&rest[tag_start..pos + marker.len() + quote_end + 1]);
+            rest = &after_marker[quote_end + 1..];
+        } else {
+            result.push_str(&rest[tag_start..pos + marker.len()]);
+            rest = after_marker;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// GET /wiki/{title} — render a wiki page, edit form, or create form for new pages.
+async fn wiki_html_page(
+    Path(title): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let page = state.wiki.get_page(&title).await;
+    let pages = state.wiki.list_pages().await;
+    let nav = wiki_nav(&pages, &title);
+    let display_title = title.replace("__", " / ");
+
+    // Page does not exist — show create form
+    if page.is_none() {
+        let body = format!(
+            r#"<div class="toolbar">
+  <a class="back-link" href="/wiki">&larr; All pages</a>
+  <span class="spacer"></span>
+</div>
+<h1>{display_title}</h1>
+<p class="create-hint">This page does not exist yet. Start writing to create it.</p>
+<div id="msg" class="msg"></div>
+<textarea class="editor" id="editor" placeholder="Page content (markdown)" autofocus># {display_title}
+
+</textarea>
+<div class="toolbar" style="margin-top:12px;">
+  <button class="btn btn-primary" onclick="savePage('{title}', true)">Create</button>
+  <a class="btn" href="/wiki">Cancel</a>
+</div>"#
+        );
+        return Html(wiki_html_shell(
+            &nav,
+            &format!("Create {display_title}"),
+            &body,
+            WIKI_EDIT_JS,
+        ));
+    }
+
+    let page = page.unwrap();
+    let etag = content_etag(&page.content);
+
+    if query.get("action").map(|s| s.as_str()) == Some("edit") {
+        // Edit form
+        let escaped_content = page
+            .content
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;");
+        let body = format!(
+            r#"<div class="toolbar">
+  <a class="back-link" href="/wiki/{title}">&larr; Back to page</a>
+  <span class="spacer"></span>
+</div>
+<h1>Editing: {display_title}</h1>
+<div id="msg" class="msg"></div>
+<input type="hidden" id="etag" value="{etag}">
+<textarea class="editor" id="editor">{escaped_content}</textarea>
+<div class="toolbar" style="margin-top:12px;">
+  <button class="btn btn-primary" onclick="savePage('{title}', false)">Save</button>
+  <a class="btn" href="/wiki/{title}">Cancel</a>
+</div>"#
+        );
+        return Html(wiki_html_shell(
+            &nav,
+            &format!("Edit {display_title}"),
+            &body,
+            WIKI_EDIT_JS,
+        ));
+    }
+
+    // Read view with wiki-links processed
+    let html = render_wiki_content(&page.content);
+    let html = wikify_links(&html, &pages);
+    let body = format!(
+        r#"<div class="toolbar">
+  <a class="back-link" href="/wiki">&larr; All pages</a>
+  <span class="spacer"></span>
+  <a class="btn" href="/wiki/{title}?action=edit">Edit</a>
+</div>
+<h1>{display_title}</h1>
+<div>{html}</div>"#
+    );
+    Html(wiki_html_shell(&nav, &display_title, &body, ""))
 }
 
 // ── Event log handlers ─────────────────────────────────────────────────
