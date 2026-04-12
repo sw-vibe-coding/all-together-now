@@ -42,9 +42,9 @@ fn log_input_event(path: &PathBuf, event: &InputEvent) -> std::io::Result<()> {
 
 fn input_event_to_bytes(event: &InputEvent) -> Vec<u8> {
     match event {
-        InputEvent::HumanText { text } => format!("{text}\n").into_bytes(),
+        InputEvent::HumanText { text } => format!("{text}\r").into_bytes(),
         InputEvent::RawBytes { bytes } => bytes.clone(),
-        InputEvent::CoordinatorCommand { command } => format!("{command}\n").into_bytes(),
+        InputEvent::CoordinatorCommand { command } => format!("{command}\r").into_bytes(),
         InputEvent::Action { action } => canned_action_to_bytes(action),
     }
 }

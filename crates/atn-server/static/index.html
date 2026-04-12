@@ -34,7 +34,8 @@
         .state-error       { background: #7f1d1d; color: #f87171; }
         .state-disconnected { background: #1f2937; color: #6b7280; }
 
-        .agent-terminal { flex: 1; min-height: 0; background: #0d1117; }
+        .agent-terminal { flex: 1; min-height: 0; background: #0d1117; cursor: text; }
+        .agent-terminal:focus-within { outline: 1px solid #e94560; outline-offset: -1px; }
         .agent-controls { display: flex; gap: 6px; padding: 6px 8px; align-items: center; border-top: 1px solid #0f3460; flex-shrink: 0; }
         .agent-controls input { flex: 1; padding: 6px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 13px; outline: none; }
         .agent-controls input:focus { border-color: #e94560; }
@@ -117,12 +118,26 @@
         .saga-toolbar button:hover { background: #0f3460; }
         .saga-toolbar .btn-distill { background: #4c1d95; color: #a78bfa; border-color: #4c1d95; }
         .saga-toolbar .btn-distill:hover { background: #5b21b6; }
-        .saga-info { display: flex; gap: 16px; padding: 8px; flex-shrink: 0; }
-        .saga-info .saga-stat { background: #16213e; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 14px; }
-        .saga-info .saga-stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-        .saga-info .saga-stat-value { font-size: 16px; color: #c9d1d9; font-weight: 600; }
+        .saga-grid { flex: 1; display: grid; gap: 8px; min-height: 0; overflow: auto; }
+        .saga-grid.saga-cols-1 { grid-template-columns: 1fr; }
+        .saga-grid.saga-cols-2 { grid-template-columns: 1fr 1fr; }
+        .saga-grid.saga-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .saga-grid.saga-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        .saga-panel { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; min-height: 0; overflow: hidden; }
+        .saga-panel-header { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+        .saga-panel-header .saga-agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; }
+        .saga-panel-header .saga-agent-role { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .saga-panel-header .spacer { flex: 1; }
+        .saga-panel-header .saga-status-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+        .saga-panel-header .saga-active { background: #064e3b; color: #34d399; }
+        .saga-panel-header .saga-completed { background: #1e3a5f; color: #60a5fa; }
+        .saga-panel-body { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 8px; }
+        .saga-info { display: flex; gap: 12px; padding: 0 0 8px; flex-shrink: 0; flex-wrap: wrap; }
+        .saga-info .saga-stat { background: #0d1117; border: 1px solid #0f3460; border-radius: 6px; padding: 6px 10px; }
+        .saga-info .saga-stat-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .saga-info .saga-stat-value { font-size: 14px; color: #c9d1d9; font-weight: 600; }
         .saga-steps { flex: 1; overflow-y: auto; padding: 4px 0; }
-        .step-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: flex-start; gap: 12px; }
+        .step-card { border: 1px solid #0f3460; border-radius: 6px; background: #0d1117; padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: flex-start; gap: 12px; }
         .step-card.step-current { border-color: #e94560; background: #1e1a2e; }
         .step-number { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
         .step-pending .step-number { background: #1f2937; color: #6b7280; }
@@ -257,14 +272,8 @@
         <div class="saga-toolbar">
             <h2>Saga Progress</h2>
             <button onclick="sagaRefresh()">Refresh</button>
-            <button class="btn-distill" id="saga-distill-btn" onclick="sagaDistill()" style="display:none;">Distill Skill</button>
         </div>
-        <div class="saga-info" id="saga-info"></div>
-        <div class="saga-steps" id="saga-steps"></div>
-        <div class="saga-trajectories" id="saga-trajectories" style="display:none;">
-            <h3>Trajectories (current task type)</h3>
-            <div id="saga-traj-list"></div>
-        </div>
+        <div class="saga-grid" id="saga-grid"></div>
     </div>
 
     <div class="graph-container" id="graph-view" style="display:none;">
@@ -378,7 +387,16 @@
             const container = document.getElementById(`term-${agentId}`);
             term.open(container);
             fitAddon.fit();
+            syncPtySize(agentId, term);
             return { term, fitAddon };
+        }
+
+        function syncPtySize(agentId, term) {
+            fetch(`${API_BASE}/api/agents/${agentId}/resize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cols: term.cols, rows: term.rows }),
+            }).catch(() => {});
         }
 
         function connectSSE(agentId) {
@@ -402,6 +420,16 @@
             };
 
             agent.evtSource = evtSource;
+
+            // Forward all keystrokes from xterm.js directly to the PTY.
+            // This handles Enter, arrows, Tab, Escape, Ctrl combos, etc.
+            agent.term.onData((data) => {
+                fetch(`${API_BASE}/api/agents/${agentId}/input`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_bytes: Array.from(new TextEncoder().encode(data)) }),
+                });
+            });
         }
 
         function setupControls(agentId) {
@@ -423,9 +451,23 @@
                 input.focus();
             }
 
+            function sendRawBytes(agentId, bytes) {
+                fetch(`${API_BASE}/api/agents/${agentId}/input`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_bytes: bytes }),
+                });
+            }
+
             sendBtn.addEventListener('click', doSend);
             input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') doSend();
+                if (e.key === 'Enter') { e.preventDefault(); doSend(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); sendRawBytes(agentId, [27, 91, 65]); }
+                else if (e.key === 'ArrowDown') { e.preventDefault(); sendRawBytes(agentId, [27, 91, 66]); }
+                else if (e.key === 'ArrowRight') { e.preventDefault(); sendRawBytes(agentId, [27, 91, 67]); }
+                else if (e.key === 'ArrowLeft') { e.preventDefault(); sendRawBytes(agentId, [27, 91, 68]); }
+                else if (e.key === 'Tab') { e.preventDefault(); sendRawBytes(agentId, [9]); }
+                else if (e.key === 'Escape') { e.preventDefault(); sendRawBytes(agentId, [27]); }
             });
 
             ctrlcBtn.addEventListener('click', () => {
@@ -560,7 +602,10 @@
             pollAgentSagas(agentList.map(a => a.id));
 
             // Handle resize
-            const fitAll = () => agents.forEach(a => a.fitAddon.fit());
+            const fitAll = () => agents.forEach((a, id) => {
+                a.fitAddon.fit();
+                syncPtySize(id, a.term);
+            });
             window.addEventListener('resize', fitAll);
             new ResizeObserver(fitAll).observe(dashboard);
 
@@ -837,90 +882,119 @@
         let sagaCurrentTaskType = null;
 
         async function sagaRefresh() {
+            const grid = document.getElementById('saga-grid');
             try {
-                const res = await fetch(`${API_BASE}/api/saga`);
-                if (!res.ok) return;
-                const data = await res.json();
-                renderSaga(data);
-            } catch (_) {}
+                // Fetch agent list
+                const agentRes = await fetch(`${API_BASE}/api/agents`);
+                if (!agentRes.ok) return;
+                const agentList = await agentRes.json();
+
+                // Fetch per-agent sagas in parallel
+                const sagaResults = await Promise.all(
+                    agentList.map(async (agent) => {
+                        try {
+                            const res = await fetch(`${API_BASE}/api/agents/${agent.id}/saga`);
+                            if (!res.ok) return { agent, data: null };
+                            const data = await res.json();
+                            return { agent, data };
+                        } catch (_) {
+                            return { agent, data: null };
+                        }
+                    })
+                );
+
+                // Filter to agents that have a saga
+                const withSagas = sagaResults.filter(r => r.data && r.data.saga);
+
+                if (withSagas.length === 0) {
+                    grid.className = 'saga-grid saga-cols-1';
+                    grid.innerHTML = '<div class="saga-none">No agent sagas found. Each agent needs a .agentrail/ directory in its repo_path.</div>';
+                    return;
+                }
+
+                const cols = Math.min(withSagas.length, 4);
+                grid.className = `saga-grid saga-cols-${cols}`;
+                grid.innerHTML = '';
+
+                for (const { agent, data } of withSagas) {
+                    const panel = renderSagaPanel(agent, data);
+                    grid.appendChild(panel);
+                }
+            } catch (_) {
+                grid.innerHTML = '<div class="saga-none">Failed to load sagas.</div>';
+            }
         }
 
-        function renderSaga(data) {
-            const infoDiv = document.getElementById('saga-info');
-            const stepsDiv = document.getElementById('saga-steps');
-            const trajDiv = document.getElementById('saga-trajectories');
-            const trajList = document.getElementById('saga-traj-list');
-            const distillBtn = document.getElementById('saga-distill-btn');
-
-            if (!data.saga) {
-                infoDiv.innerHTML = '';
-                stepsDiv.innerHTML = '<div class="saga-none">No .agentrail/ saga found in this project.</div>';
-                trajDiv.style.display = 'none';
-                distillBtn.style.display = 'none';
-                return;
-            }
+        function renderSagaPanel(agent, data) {
+            const panel = document.createElement('div');
+            panel.className = 'saga-panel';
 
             const saga = data.saga;
             const steps = data.steps;
             const completed = steps.filter(s => s.status === 'completed').length;
             const total = steps.length;
             const current = steps.find(s => s.status === 'in-progress');
+            const statusCls = saga.status === 'completed' ? 'saga-completed' : 'saga-active';
 
-            infoDiv.innerHTML = `
-                <div class="saga-stat"><div class="saga-stat-label">Saga</div><div class="saga-stat-value">${saga.name}</div></div>
-                <div class="saga-stat"><div class="saga-stat-label">Status</div><div class="saga-stat-value">${saga.status}</div></div>
-                <div class="saga-stat"><div class="saga-stat-label">Progress</div><div class="saga-stat-value">${completed} / ${total}</div></div>
-                <div class="saga-stat"><div class="saga-stat-label">Current Step</div><div class="saga-stat-value">${current ? current.slug : 'none'}</div></div>
-            `;
-
-            stepsDiv.innerHTML = '';
-            for (const step of steps) {
-                const statusCls = 'step-' + step.status.replace(/_/g, '-');
-                const isCurrent = step.status === 'in-progress';
-                const card = document.createElement('div');
-                card.className = `step-card ${statusCls}` + (isCurrent ? ' step-current' : '');
-                const desc = step.description.length > 120 ? step.description.slice(0, 120) + '...' : step.description;
-                card.innerHTML = `
-                    <div class="step-number">${step.number}</div>
-                    <div class="step-body">
-                        <div class="step-header">
-                            <span class="step-slug">${step.slug}</span>
-                            <span class="step-status">${step.status}</span>
-                        </div>
-                        <div class="step-desc">${desc}</div>
-                        <div class="step-meta">
-                            ${step.role ? `<span>Role: ${step.role}</span>` : ''}
-                            ${step.task_type ? `<span>Task: ${step.task_type}</span>` : ''}
-                            ${step.completed_at ? `<span>Done: ${step.completed_at}</span>` : ''}
-                        </div>
+            let html = `
+                <div class="saga-panel-header">
+                    <span class="saga-agent-name">${agent.name}</span>
+                    <span class="saga-agent-role">${agent.role}</span>
+                    <span class="spacer"></span>
+                    <span class="saga-status-badge ${statusCls}">${saga.status}</span>
+                </div>
+                <div class="saga-panel-body">
+                    <div class="saga-info">
+                        <div class="saga-stat"><div class="saga-stat-label">Saga</div><div class="saga-stat-value">${saga.name}</div></div>
+                        <div class="saga-stat"><div class="saga-stat-label">Progress</div><div class="saga-stat-value">${completed} / ${total}</div></div>
+                        <div class="saga-stat"><div class="saga-stat-label">Current</div><div class="saga-stat-value">${current ? current.slug : 'none'}</div></div>
                     </div>
-                `;
-                stepsDiv.appendChild(card);
+                    <div class="saga-steps">`;
+
+            for (const step of steps) {
+                const sCls = 'step-' + step.status.replace(/_/g, '-');
+                const isCurrent = step.status === 'in-progress';
+                const desc = step.description.length > 100 ? step.description.slice(0, 100) + '...' : step.description;
+                html += `
+                        <div class="step-card ${sCls}${isCurrent ? ' step-current' : ''}">
+                            <div class="step-number">${step.number}</div>
+                            <div class="step-body">
+                                <div class="step-header">
+                                    <span class="step-slug">${step.slug}</span>
+                                    <span class="step-status">${step.status}</span>
+                                </div>
+                                <div class="step-desc">${desc}</div>
+                                <div class="step-meta">
+                                    ${step.task_type ? `<span>Task: ${step.task_type}</span>` : ''}
+                                    ${step.completed_at ? `<span>Done: ${step.completed_at}</span>` : ''}
+                                </div>
+                            </div>
+                        </div>`;
             }
 
+            html += '</div>'; // close saga-steps
+
             // Trajectories
-            sagaCurrentTaskType = current && current.task_type ? current.task_type : null;
             if (data.trajectories.length > 0) {
-                trajDiv.style.display = '';
-                trajList.innerHTML = '';
+                html += `<div class="saga-trajectories">
+                    <h3>Trajectories</h3>`;
                 for (const t of data.trajectories) {
                     const rewardCls = t.reward > 0 ? 'traj-reward-pos' : (t.reward < 0 ? 'traj-reward-neg' : 'traj-reward-zero');
-                    const tc = document.createElement('div');
-                    tc.className = 'traj-card';
-                    tc.innerHTML = `
+                    html += `
+                    <div class="traj-card">
                         <div class="traj-action">${t.action}</div>
                         <div class="traj-meta">
                             <span class="${rewardCls}">Reward: ${t.reward > 0 ? '+' : ''}${t.reward}</span>
                             &middot; ${t.result} &middot; ${t.timestamp}
                         </div>
-                    `;
-                    trajList.appendChild(tc);
+                    </div>`;
                 }
-                distillBtn.style.display = sagaCurrentTaskType ? '' : 'none';
-            } else {
-                trajDiv.style.display = 'none';
-                distillBtn.style.display = 'none';
+                html += '</div>'; // close saga-trajectories
             }
+
+            html += '</div>'; // close saga-panel-body
+            panel.innerHTML = html;
+            return panel;
         }
 
         async function sagaDistill() {

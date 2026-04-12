@@ -53,6 +53,7 @@ impl PtySession {
 
         let mut cmd = CommandBuilder::new("bash");
         cmd.cwd(&config.repo_path);
+        cmd.env("TERM", "xterm-256color");
 
         let child = pair
             .slave
@@ -180,6 +181,18 @@ impl PtySession {
     pub async fn send_ctrl_c(&self) -> Result<()> {
         self.send_input(InputEvent::RawBytes { bytes: vec![0x03] })
             .await
+    }
+
+    /// Resize the PTY to match the browser terminal dimensions.
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+        self._master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| AtnError::Pty(format!("resize failed: {e}")))
     }
 
     /// Get a new receiver for the agent's output stream.

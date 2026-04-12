@@ -1,5 +1,6 @@
 # Changes
 
+- Phase 9: Interactive TUI agents + multi-saga UI + agent-to-agent delegation — PTY resize sync (browser↔PTY), TERM=xterm-256color for TUI apps, \r instead of \n for Enter in TUI mode, raw keystroke forwarding from xterm.js (arrows/Tab/Escape), raw_bytes input API, per-agent saga panels side-by-side in Saga tab, router delivers events as TUI prompts (not bash comments), outbox path fix for remote base_dir, submit_event uses base_dir
 - atn-replay crate: Rust CLI for rendering PTY transcript.log files; screenshot (--html standalone, --html-fragment for org embed), at (offset), steps (chunked), dashboard (org-mode for emacs auto-revert), list, text (plain)
 - Input logging: writer task logs all InputEvent to inputs.jsonl with RFC3339 timestamps for correlation with transcript.log
 - Demo: 2-agent app-building scenario — dev creates a CLI app with "greet" command, ATN routes feature request to second agent who adds "farewell" command, both verified; reg-rs regression test; docs/demo-review.org with PTY screen captures; docs/needed-tools.md

@@ -148,11 +148,17 @@ async fn process_outbox_file(
                 .await
                 .map_err(|e| format!("write inbox: {e}"))?;
 
-            // Poke the target agent's PTY with a notification.
-            let notification = format!(
-                "\n[ATN] Message from {}: {} (priority: {:?})\n",
-                event.source_agent, event.summary, event.priority
-            );
+            // Deliver the event as a prompt to the target agent's TUI.
+            // The summary becomes the agent's next instruction; detail goes
+            // to the inbox JSON file (already written above) for context.
+            let prompt = if let Some(ref detail) = event.wiki_link {
+                format!(
+                    "[ATN task from {}] {}\n\nSee: {}",
+                    event.source_agent, event.summary, detail
+                )
+            } else {
+                format!("[ATN task from {}] {}", event.source_agent, event.summary)
+            };
             let tx = {
                 let mgr = manager.lock().await;
                 mgr.get_session(&atn_core::agent::AgentId(agent_id.clone()))
@@ -161,9 +167,7 @@ async fn process_outbox_file(
             };
             if let Some(tx) = tx {
                 let _ = tx
-                    .send(InputEvent::CoordinatorCommand {
-                        command: format!("# {notification}"),
-                    })
+                    .send(InputEvent::HumanText { text: prompt })
                     .await;
             }
             delivered = true;

@@ -55,7 +55,10 @@ const DEFAULT_CONFIG_PATH: &str = "agents.toml";
 
 #[derive(Deserialize)]
 struct InputPayload {
+    #[serde(default)]
     text: String,
+    #[serde(default)]
+    raw_bytes: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -227,6 +230,7 @@ async fn main() {
         .route("/api/agents/{id}/sse", get(agent_sse))
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
+        .route("/api/agents/{id}/resize", post(agent_resize))
         .route("/api/agents/{id}/state", get(agent_state))
         .route("/api/agents/{id}/restart", post(agent_restart))
         .route("/api/agents/{id}/stop", post(stop_agent))
@@ -390,7 +394,16 @@ async fn agent_input(
             .map_err(|_| StatusCode::NOT_FOUND)?;
         session.input_sender()
     };
-    tx.send(InputEvent::HumanText { text: payload.text })
+    let event = if !payload.raw_bytes.is_empty() {
+        InputEvent::RawBytes {
+            bytes: payload.raw_bytes,
+        }
+    } else {
+        InputEvent::HumanText {
+            text: payload.text,
+        }
+    };
+    tx.send(event)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
@@ -410,6 +423,28 @@ async fn agent_ctrl_c(
     };
     tx.send(InputEvent::RawBytes { bytes: vec![0x03] })
         .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+struct ResizeBody {
+    cols: u16,
+    rows: u16,
+}
+
+async fn agent_resize(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Json(body): Json<ResizeBody>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id);
+    let mgr = state.manager.lock().await;
+    let session = mgr
+        .get_session(&agent_id)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    session
+        .resize(body.cols, body.rows)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::OK)
 }
@@ -1150,13 +1185,15 @@ async fn list_events(
 
 /// Submit a push event for routing (e.g., from the UI or an external tool).
 async fn submit_event(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<SubmitEventBody>,
 ) -> StatusCode {
     let event = body.event;
 
     // Write the event to the source agent's outbox as a JSON file.
-    let outbox_dir = PathBuf::from(".atn")
+    let outbox_dir = state
+        .base_dir
+        .join(".atn")
         .join("outboxes")
         .join(&event.source_agent);
     let _ = tokio::fs::create_dir_all(&outbox_dir).await;
