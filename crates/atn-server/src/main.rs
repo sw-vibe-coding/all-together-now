@@ -770,6 +770,7 @@ async fn save_config(State(state): State<AppState>) -> Result<StatusCode, (Statu
 struct DepGraphNode {
     id: String,
     name: String,
+    role: String,
     state: String,
     blocked_on: Vec<String>,
 }
@@ -782,13 +783,13 @@ async fn agent_dependency_graph(State(state): State<AppState>) -> Json<Vec<DepGr
             .filter_map(|id| {
                 mgr.get_session(id)
                     .ok()
-                    .map(|session| (id.0.clone(), session.name().to_string(), session.state()))
+                    .map(|session| (id.0.clone(), session.name().to_string(), session.role().to_string(), session.state()))
             })
             .collect()
     };
 
     let mut nodes = Vec::with_capacity(pending.len());
-    for (id, name, state_lock) in pending {
+    for (id, name, role, state_lock) in pending {
         let s = state_lock.read().await;
         let blocked_on = match &*s {
             AgentState::Blocked { on } => on.clone(),
@@ -801,6 +802,7 @@ async fn agent_dependency_graph(State(state): State<AppState>) -> Json<Vec<DepGr
         nodes.push(DepGraphNode {
             id,
             name,
+            role,
             state: state_key,
             blocked_on,
         });
