@@ -263,8 +263,12 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
 
-    let addr = "0.0.0.0:7500";
-    let listener = match tokio::net::TcpListener::bind(addr).await {
+    // Port: ATN_PORT overrides the default 7500. Passing ATN_PORT=0 lets the
+    // OS pick a free port; we then print the resolved port so integration
+    // tests (and humans) can discover it.
+    let port = std::env::var("ATN_PORT").unwrap_or_else(|_| "7500".to_string());
+    let addr = format!("0.0.0.0:{port}");
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(
@@ -274,7 +278,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    tracing::info!("Listening on http://{addr}");
+    let bound = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| addr.clone());
+    tracing::info!("Listening on http://{bound}");
+    // Machine-readable marker so test harnesses can regex the port back out.
+    println!("atn-server ready on {bound}");
 
     let manager_for_shutdown = state.manager.clone();
     axum::serve(listener, app)

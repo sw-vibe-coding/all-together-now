@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fake codex: stand-in for the real `codex` CLI during the three-agent CI
+# demo. Same pattern as fake-claude but prefixes output with `codex>`.
+
+printf 'fake-codex: hlasm worker is up\n'
+printf 'fake-codex: ATN integration test shim (set ATN_DEMO_REAL=1 for real)\n'
+
+while IFS= read -r line; do
+    printf 'codex> %s\n' "$line"
+done

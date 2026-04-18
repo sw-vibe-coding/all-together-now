@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake claude: stand-in for the real `claude` CLI during the three-agent CI
+# demo. Prints an identifying banner on startup and then echoes every line
+# from stdin to stdout with a `claude> ` prefix. Stays alive (does not exit)
+# so the PTY looks like a live agent.
+
+printf 'fake-claude: coordinator is up\n'
+printf 'fake-claude: ATN integration test shim (set ATN_DEMO_REAL=1 for real)\n'
+
+while IFS= read -r line; do
+    printf 'claude> %s\n' "$line"
+done

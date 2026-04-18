@@ -1,0 +1,8 @@
+{
+    "name": "coordinator",
+    "role": "coordinator",
+    "transport": "local",
+    "working_dir": "~/work/atn-demo",
+    "project": "atn-demo",
+    "agent": "claude"
+}

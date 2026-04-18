@@ -1,0 +1,10 @@
+{
+    "name": "worker-rpg",
+    "role": "worker",
+    "transport": "mosh",
+    "user": "devr1",
+    "host": "queenbee",
+    "working_dir": "/home/devr1/work/rpg-ii",
+    "project": "rpg-ii",
+    "agent": "opencode-z-ai-glm-5"
+}

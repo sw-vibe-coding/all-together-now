@@ -1,0 +1,10 @@
+{
+    "name": "worker-hlasm",
+    "role": "worker",
+    "transport": "mosh",
+    "user": "devh1",
+    "host": "queenbee",
+    "working_dir": "/home/devh1/work/hlasm",
+    "project": "hlasm",
+    "agent": "codex"
+}

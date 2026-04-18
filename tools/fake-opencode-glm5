@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake opencode with zhipu GLM-5: stand-in for `opencode-z-ai-glm-5` during
+# the three-agent CI demo. Same pattern as fake-claude/codex; prefixes with
+# `glm5>`.
+
+printf 'fake-opencode-glm5: rpg-ii worker is up\n'
+printf 'fake-opencode-glm5: ATN integration test shim (set ATN_DEMO_REAL=1 for real)\n'
+
+while IFS= read -r line; do
+    printf 'glm5> %s\n' "$line"
+done
