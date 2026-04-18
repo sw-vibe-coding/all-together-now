@@ -172,6 +172,8 @@
         /* Restart / Stop / Delete buttons */
         .btn-restart { background: #1e3a5f; color: #60a5fa; font-size: 11px; padding: 6px 8px; }
         .btn-restart:hover { background: #264f78; }
+        .btn-reconnect { background: #14532d; color: #86efac; font-size: 11px; padding: 6px 8px; }
+        .btn-reconnect:hover { background: #166534; }
         .btn-stop { background: #78350f; color: #fbbf24; font-size: 11px; padding: 6px 8px; }
         .btn-stop:hover { background: #92400e; }
         .btn-delete { background: #7f1d1d; color: #fca5a5; font-size: 11px; padding: 6px 8px; }
@@ -399,7 +401,8 @@
                     <input type="text" id="input-${agent.id}" placeholder="Command for ${agent.name}...">
                     <button class="btn-send" data-agent="${agent.id}">Send</button>
                     <button class="btn-ctrl-c" data-agent="${agent.id}">^C</button>
-                    <button class="btn-restart" data-agent="${agent.id}">Restart</button>
+                    <button class="btn-restart" data-agent="${agent.id}" title="Graceful shutdown (Ctrl-C x2) and respawn">Restart</button>
+                    <button class="btn-reconnect" data-agent="${agent.id}" title="Hard-kill local mosh/ssh and respawn. For mosh+tmux, re-attaches to the still-running remote session.">Reconnect</button>
                     <button class="btn-stop" data-agent="${agent.id}">Stop</button>
                     <button class="btn-edit-cfg" data-agent="${agent.id}">Config</button>
                     <button class="btn-delete" data-agent="${agent.id}">Delete</button>
@@ -557,6 +560,28 @@
                     restartBtn.textContent = 'Error';
                 }
                 setTimeout(() => { restartBtn.textContent = 'Restart'; restartBtn.disabled = false; }, 2000);
+            });
+
+            const reconnectBtn = panel.querySelector('.btn-reconnect');
+            reconnectBtn.addEventListener('click', async () => {
+                reconnectBtn.textContent = 'Reconnecting...';
+                reconnectBtn.disabled = true;
+                try {
+                    const res = await fetch(`${API_BASE}/api/agents/${agentId}/reconnect`, { method: 'POST' });
+                    if (res.ok) {
+                        const agent = agents.get(agentId);
+                        if (agent && agent.evtSource) agent.evtSource.close();
+                        // Don't clear the terminal — for mosh+tmux the re-attach
+                        // should pick up the live remote session intact.
+                        setTimeout(() => connectSSE(agentId), 1000);
+                        reconnectBtn.textContent = 'Reconnected';
+                    } else {
+                        reconnectBtn.textContent = 'Failed';
+                    }
+                } catch (_) {
+                    reconnectBtn.textContent = 'Error';
+                }
+                setTimeout(() => { reconnectBtn.textContent = 'Reconnect'; reconnectBtn.disabled = false; }, 2000);
             });
 
             const stopBtn = panel.querySelector('.btn-stop');
