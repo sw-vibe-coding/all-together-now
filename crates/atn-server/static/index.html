@@ -187,10 +187,15 @@
         .new-agent-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
         .new-agent-form input, .new-agent-form select { padding: 5px 8px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
         .new-agent-form input:focus { border-color: #e94560; }
-        .new-agent-form .field-id { width: 100px; }
         .new-agent-form .field-name { width: 140px; }
-        .new-agent-form .field-path { width: 200px; }
-        .new-agent-form .field-launch { width: 120px; }
+        .new-agent-form .field-host { width: 120px; }
+        .new-agent-form .field-user { width: 100px; }
+        .new-agent-form .field-dir { width: 240px; }
+        .new-agent-form .field-project { width: 120px; }
+        .new-agent-form .field-args { width: 220px; }
+        .new-agent-form .field-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+        .new-agent-form .field-label { color:#888; font-size:11px; margin-right:2px; }
+        .new-agent-form .field-err { color:#fca5a5; font-size:11px; }
         .new-agent-form button { padding: 5px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
         .new-agent-form .btn-create { background: #4ecca3; color: #1a1a2e; }
         .new-agent-form .btn-create:hover { background: #3db892; }
@@ -234,18 +239,54 @@
     </header>
     <div class="new-agent-bar" id="new-agent-bar">
         <div class="new-agent-form">
-            <input class="field-id" id="new-id" placeholder="agent-id">
-            <input class="field-name" id="new-name" placeholder="Display Name">
-            <input class="field-path" id="new-path" placeholder="Repo path (e.g. . or /abs/path)">
-            <select id="new-role">
-                <option value="developer">Developer</option>
-                <option value="qa">QA</option>
-                <option value="pm">PM</option>
-                <option value="coordinator">Coordinator</option>
-            </select>
-            <input class="field-launch" id="new-launch" placeholder="Launch cmd" value="bash">
-            <button class="btn-create" onclick="createAgent()">Create</button>
-            <button class="btn-cancel" onclick="toggleNewAgent()">Cancel</button>
+            <div class="field-row">
+                <span class="field-label">name</span>
+                <input class="field-name" id="new-name" placeholder="e.g. worker-hlasm">
+                <span class="field-label">role</span>
+                <select id="new-role">
+                    <option value="worker">worker</option>
+                    <option value="coordinator">coordinator</option>
+                    <option value="qa">qa</option>
+                    <option value="pm">pm</option>
+                </select>
+                <span class="field-label">transport</span>
+                <select id="new-transport" onchange="updateTransportFields()">
+                    <option value="local">local</option>
+                    <option value="mosh">mosh</option>
+                    <option value="ssh">ssh</option>
+                </select>
+            </div>
+            <div class="field-row">
+                <span class="field-label">user</span>
+                <input class="field-user" id="new-user" placeholder="devh1" disabled>
+                <span class="field-label">@</span>
+                <input class="field-host" id="new-host" placeholder="queenbee" disabled>
+                <span class="field-label">dir</span>
+                <input class="field-dir" id="new-dir" placeholder="/home/devh1/work/hlasm">
+                <span class="field-label">project</span>
+                <input class="field-project" id="new-project" placeholder="(optional label)">
+            </div>
+            <div class="field-row">
+                <span class="field-label">agent</span>
+                <select id="new-agent-cli">
+                    <option value="claude">claude</option>
+                    <option value="codex">codex</option>
+                    <option value="opencode">opencode</option>
+                    <option value="opencode-z-ai-glm-5">opencode-z-ai-glm-5</option>
+                    <option value="gemini">gemini</option>
+                    <option value="bash">bash (interactive shell)</option>
+                    <option value="">custom...</option>
+                </select>
+                <input class="field-name" id="new-agent-custom" placeholder="custom binary" style="display:none;">
+                <span class="field-label">args</span>
+                <input class="field-args" id="new-agent-args" placeholder="(optional extra args)">
+                <button class="btn-create" onclick="createAgent()">Create</button>
+                <button class="btn-cancel" onclick="toggleNewAgent()">Cancel</button>
+            </div>
+            <div class="field-row">
+                <span id="new-agent-err" class="field-err"></span>
+                <span id="new-agent-preview" style="color:#4ecca3;font-family:monospace;font-size:11px;"></span>
+            </div>
         </div>
     </div>
     <div class="dashboard" id="dashboard"></div>
@@ -670,45 +711,123 @@
         function toggleNewAgent() {
             const bar = document.getElementById('new-agent-bar');
             bar.classList.toggle('visible');
+            if (bar.classList.contains('visible')) {
+                updateTransportFields();
+                updateCommandPreview();
+            }
         }
 
-        async function createAgent() {
-            const id = document.getElementById('new-id').value.trim();
+        function updateTransportFields() {
+            const transport = document.getElementById('new-transport').value;
+            const remote = transport !== 'local';
+            document.getElementById('new-user').disabled = !remote;
+            document.getElementById('new-host').disabled = !remote;
+            if (!remote) {
+                document.getElementById('new-user').value = '';
+                document.getElementById('new-host').value = '';
+            }
+            updateCommandPreview();
+        }
+
+        function readSpawnSpec() {
+            const cliSel = document.getElementById('new-agent-cli');
+            const customEl = document.getElementById('new-agent-custom');
+            customEl.style.display = cliSel.value === '' ? 'inline-block' : 'none';
+            const agentName = cliSel.value === '' ? customEl.value.trim() : cliSel.value;
             const name = document.getElementById('new-name').value.trim();
-            const repoPath = document.getElementById('new-path').value.trim();
             const role = document.getElementById('new-role').value;
-            const launch = document.getElementById('new-launch').value.trim();
-
-            if (!id || !name) { alert('Agent ID and Name are required.'); return; }
-
-            const body = {
-                id, name,
-                repo_path: repoPath || '.',
-                role,
-                launch_command: launch || 'bash',
+            const transport = document.getElementById('new-transport').value;
+            const host = document.getElementById('new-host').value.trim();
+            const user = document.getElementById('new-user').value.trim();
+            const workingDir = document.getElementById('new-dir').value.trim();
+            const project = document.getElementById('new-project').value.trim();
+            const agentArgs = document.getElementById('new-agent-args').value.trim();
+            return {
+                name, role, transport,
+                host: host || null,
+                user: user || null,
+                working_dir: workingDir,
+                project: project || null,
+                agent: agentName,
+                agent_args: agentArgs || null,
             };
+        }
 
+        function validateSpec(s) {
+            const missing = [];
+            if (!s.name) missing.push('name');
+            if (!s.working_dir) missing.push('working_dir');
+            if (!s.agent) missing.push('agent');
+            if (s.transport !== 'local') {
+                if (!s.host) missing.push('host');
+                if (!s.user) missing.push('user');
+            }
+            return missing;
+        }
+
+        function previewCommand(s) {
+            const tail = s.agent_args ? `${s.agent} ${s.agent_args}` : s.agent;
+            const inner = `cd ${s.working_dir || '<dir>'} && ${tail || '<agent>'}`;
+            if (s.transport === 'local') return inner;
+            const bin = s.transport; // mosh | ssh
+            const user = s.user || '<user>';
+            const host = s.host || '<host>';
+            const sess = `atn-${s.name || '<name>'}`;
+            return `${bin} ${user}@${host} -- tmux new-session -A -s ${sess} '${inner}'`;
+        }
+
+        function updateCommandPreview() {
+            const spec = readSpawnSpec();
+            document.getElementById('new-agent-preview').textContent = previewCommand(spec);
+            const missing = validateSpec(spec);
+            const err = document.getElementById('new-agent-err');
+            err.textContent = missing.length ? `missing: ${missing.join(', ')}` : '';
+        }
+
+        ['new-name','new-role','new-transport','new-host','new-user','new-dir',
+         'new-project','new-agent-cli','new-agent-custom','new-agent-args'].forEach(id => {
+            document.addEventListener('DOMContentLoaded', () => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', updateCommandPreview);
+                if (el && el.tagName === 'SELECT') el.addEventListener('change', updateCommandPreview);
+            });
+        });
+
+        async function createAgent() {
+            const spec = readSpawnSpec();
+            const missing = validateSpec(spec);
+            if (missing.length) {
+                document.getElementById('new-agent-err').textContent =
+                    `missing: ${missing.join(', ')}`;
+                return;
+            }
             try {
                 const res = await fetch(`${API_BASE}/api/agents`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
+                    body: JSON.stringify(spec),
                 });
-                if (res.ok || res.status === 201) {
-                    // Clear form and hide bar.
-                    document.getElementById('new-id').value = '';
-                    document.getElementById('new-name').value = '';
-                    document.getElementById('new-path').value = '';
-                    document.getElementById('new-launch').value = 'bash';
+                if (res.status === 201) {
+                    const info = await res.json();
+                    // Clear form.
+                    ['new-name','new-host','new-user','new-dir','new-project','new-agent-args','new-agent-custom']
+                        .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+                    document.getElementById('new-agent-err').textContent = '';
+                    document.getElementById('new-agent-preview').textContent = '';
                     document.getElementById('new-agent-bar').classList.remove('visible');
-                    // Add the new panel.
-                    addAgentPanel({ id, name, role, state: { state: 'starting' } });
+                    // Drop any existing empty-state card.
+                    document.querySelectorAll('.empty-state').forEach(n => n.remove());
+                    addAgentPanel({
+                        id: info.id, name: info.name, role: info.role,
+                        state: { state: 'starting' },
+                    });
                 } else {
-                    const text = await res.text();
-                    alert(`Failed to create agent: ${text}`);
+                    const body = await res.json().catch(() => ({error:'unknown'}));
+                    document.getElementById('new-agent-err').textContent =
+                        `${body.error}${body.missing ? ': ' + body.missing.join(', ') : ''}`;
                 }
             } catch (e) {
-                alert(`Error creating agent: ${e}`);
+                document.getElementById('new-agent-err').textContent = `network error: ${e}`;
             }
         }
 

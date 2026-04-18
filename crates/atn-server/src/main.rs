@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use atn_core::agent::{AgentConfig, AgentId, AgentState};
 use atn_core::config::load_project_config;
+use atn_core::spawn_spec::SpawnSpec;
 use atn_core::event::{InputEvent, OutputSignal, PushEvent};
 use atn_core::router::EventLogEntry;
 use atn_pty::manager::SessionManager;
@@ -41,6 +42,9 @@ struct SharedState {
     agent_repo_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
     /// Agent configs for restart support.
     agent_configs: Arc<Mutex<HashMap<String, AgentConfig>>>,
+    /// Original structured spawn spec for agents created via the New Agent dialog.
+    /// Absent for agents loaded from agents.toml (which only has the flat shape).
+    agent_specs: Arc<Mutex<HashMap<String, SpawnSpec>>>,
     /// Base directory for resolving relative paths.
     base_dir: PathBuf,
     /// Path to agents.toml for saving config.
@@ -67,6 +71,12 @@ struct AgentInfo {
     name: String,
     role: String,
     state: AgentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spec: Option<SpawnSpec>,
+    /// The actual shell command the PTY runs (derived from spec for new-dialog
+    /// agents, raw `launch_command` for agents loaded from agents.toml).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    launch_command: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -211,6 +221,7 @@ async fn main() {
         event_log,
         agent_repo_paths: Arc::new(Mutex::new(agent_repo_paths)),
         agent_configs: Arc::new(Mutex::new(agent_configs_map)),
+        agent_specs: Arc::new(Mutex::new(HashMap::new())),
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
     };
@@ -329,14 +340,23 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
             })
             .collect()
     };
+    let specs = state.agent_specs.lock().await.clone();
+    let configs = state.agent_configs.lock().await.clone();
     let mut agents = Vec::with_capacity(pending.len());
     for (id, name, role, state_lock) in pending {
         let s = state_lock.read().await;
+        let spec = specs.get(&id).cloned();
+        let launch_command = configs
+            .get(&id)
+            .map(|c| c.launch_command.clone())
+            .filter(|s| !s.is_empty());
         agents.push(AgentInfo {
             id,
             name,
             role,
             state: s.clone(),
+            spec,
+            launch_command,
         });
     }
     Json(agents)
@@ -360,11 +380,21 @@ async fn agent_state(
         )
     };
     let s = state_lock.read().await;
+    let spec = state.agent_specs.lock().await.get(&agent_id.0).cloned();
+    let launch_command = state
+        .agent_configs
+        .lock()
+        .await
+        .get(&agent_id.0)
+        .map(|c| c.launch_command.clone())
+        .filter(|s| !s.is_empty());
     Ok(Json(AgentInfo {
         id: agent_id.0,
         name,
         role,
         state: s.clone(),
+        spec,
+        launch_command,
     }))
 }
 
@@ -497,24 +527,6 @@ async fn agent_restart(
 
 // ── Agent CRUD ───────────────────────────────────────────────────────
 
-/// Request body for creating a new agent.
-#[derive(Deserialize)]
-struct CreateAgentBody {
-    id: String,
-    name: String,
-    repo_path: String,
-    #[serde(default = "default_role_str")]
-    role: String,
-    #[serde(default)]
-    setup_commands: Vec<String>,
-    #[serde(default)]
-    launch_command: String,
-}
-
-fn default_role_str() -> String {
-    "developer".to_string()
-}
-
 /// Request body for updating an agent's config.
 #[derive(Deserialize)]
 struct UpdateAgentBody {
@@ -534,60 +546,125 @@ fn parse_role(s: &str) -> atn_core::agent::AgentRole {
     }
 }
 
-/// Create a new agent session.
+#[derive(Serialize)]
+struct FieldError {
+    error: &'static str,
+    missing: Vec<&'static str>,
+}
+
+/// Create a new agent session from a structured SpawnSpec.
+///
+/// Validates required fields per transport, composes the shell command,
+/// spawns the PTY, and stores the spec alongside the runtime config.
 async fn create_agent(
     State(state): State<AppState>,
-    Json(body): Json<CreateAgentBody>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let id = body.id.clone();
+    Json(spec): Json<SpawnSpec>,
+) -> Result<(StatusCode, Json<AgentInfo>), (StatusCode, Json<FieldError>)> {
+    if let Err(missing) = spec.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(FieldError {
+                error: "invalid or missing fields",
+                missing,
+            }),
+        ));
+    }
+
+    let id = spec.name.trim().to_string();
 
     // Check if agent already exists.
     {
         let configs = state.agent_configs.lock().await;
         if configs.contains_key(&id) {
-            return Err((StatusCode::CONFLICT, format!("Agent '{id}' already exists")));
+            return Err((
+                StatusCode::CONFLICT,
+                Json(FieldError {
+                    error: "agent already exists",
+                    missing: vec!["name"],
+                }),
+            ));
         }
     }
 
-    let role = parse_role(&body.role);
-    let repo_path = if std::path::Path::new(&body.repo_path).is_absolute() {
-        PathBuf::from(&body.repo_path)
+    let role = parse_role(&spec.role);
+    let launch_command = spec.compose_command();
+
+    // For local transport, working_dir is the real repo_path. For remote, we
+    // use base_dir as a placeholder (the real dir lives on the target host).
+    let repo_path = if spec.transport == atn_core::spawn_spec::Transport::Local {
+        let wd = std::path::Path::new(&spec.working_dir);
+        if wd.is_absolute() {
+            wd.to_path_buf()
+        } else {
+            state.base_dir.join(wd)
+        }
     } else {
-        state.base_dir.join(&body.repo_path)
+        state.base_dir.clone()
     };
+
+    let display_name = format!("{} ({})", spec.name, spec.project_label());
 
     let config = AgentConfig {
         id: AgentId(id.clone()),
-        name: body.name,
+        name: display_name.clone(),
         repo_path: repo_path.clone(),
         role,
-        setup_commands: body.setup_commands,
-        launch_command: body.launch_command,
+        setup_commands: Vec::new(),
+        launch_command: launch_command.clone(),
     };
 
-    // Spawn the agent session.
     {
         let mut mgr = state.manager.lock().await;
         mgr.spawn_agent(config.clone()).map_err(|e| {
+            tracing::error!("spawn failed for {id}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to spawn agent: {e}"),
+                Json(FieldError {
+                    error: "failed to spawn agent",
+                    missing: vec![],
+                }),
             )
         })?;
     }
 
-    // Store config and repo path.
     {
         let mut configs = state.agent_configs.lock().await;
-        configs.insert(id.clone(), config);
+        configs.insert(id.clone(), config.clone());
     }
     {
         let mut repo_paths = state.agent_repo_paths.lock().await;
         repo_paths.insert(id.clone(), repo_path);
     }
+    {
+        let mut specs = state.agent_specs.lock().await;
+        specs.insert(id.clone(), spec.clone());
+    }
 
-    tracing::info!("Created agent: {id}");
-    Ok(StatusCode::CREATED)
+    tracing::info!("Created agent: {id} (transport={:?})", spec.transport);
+
+    let state_lock = {
+        let mgr = state.manager.lock().await;
+        mgr.get_session(&AgentId(id.clone()))
+            .map(|sess| sess.state())
+            .ok()
+    };
+    let current_state = if let Some(lock) = state_lock {
+        lock.read().await.clone()
+    } else {
+        AgentState::Starting
+    };
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AgentInfo {
+            id,
+            name: display_name,
+            role: format!("{:?}", config.role).to_lowercase(),
+            state: current_state,
+            spec: Some(spec),
+            launch_command: Some(launch_command),
+        }),
+    ))
 }
 
 /// Delete (destroy) an agent session.
@@ -608,7 +685,7 @@ async fn delete_agent(
     let mut session = old_session;
     let _ = session.shutdown().await;
 
-    // Remove from config and repo paths.
+    // Remove from config, repo paths, and specs.
     {
         let mut configs = state.agent_configs.lock().await;
         configs.remove(&id);
@@ -616,6 +693,10 @@ async fn delete_agent(
     {
         let mut repo_paths = state.agent_repo_paths.lock().await;
         repo_paths.remove(&id);
+    }
+    {
+        let mut specs = state.agent_specs.lock().await;
+        specs.remove(&id);
     }
 
     tracing::info!("Deleted agent: {id}");
