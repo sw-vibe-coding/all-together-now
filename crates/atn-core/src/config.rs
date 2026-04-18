@@ -10,7 +10,7 @@ use crate::error::Result;
 pub struct ProjectConfig {
     #[serde(default)]
     pub project: ProjectMeta,
-    #[serde(rename = "agent")]
+    #[serde(rename = "agent", default)]
     pub agents: Vec<AgentEntry>,
 }
 
@@ -109,6 +109,23 @@ role = "qa"
         assert_eq!(config.agents[0].id, "frontend");
         assert_eq!(config.agents[1].role, AgentRole::Developer);
         assert_eq!(config.agents[2].role, AgentRole::QA);
+    }
+
+    #[test]
+    fn parse_empty_agents_toml() {
+        let toml_str = r#"
+[project]
+name = "empty-start"
+"#;
+        let config: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.project.name, "empty-start");
+        assert!(config.agents.is_empty());
+    }
+
+    #[test]
+    fn parse_agents_toml_no_project_section() {
+        let config: ProjectConfig = toml::from_str("").unwrap();
+        assert!(config.agents.is_empty());
     }
 
     #[test]

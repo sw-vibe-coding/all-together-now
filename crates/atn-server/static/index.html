@@ -619,6 +619,24 @@
             else if (count <= 3) dashboard.className = 'dashboard cols-3';
             else dashboard.className = 'dashboard cols-4';
 
+            if (count === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.style.cssText = 'grid-column:1/-1;padding:48px 24px;text-align:center;color:#a0a0b0;';
+                empty.innerHTML = `
+                    <h2 style="color:#eee;margin:0 0 12px;">No agents yet</h2>
+                    <p style="max-width:520px;margin:0 auto 20px;line-height:1.5;">
+                        ATN is running but no agents are configured. Add one to get started&mdash;
+                        pick a host (local or remote), working directory, and the agent CLI to run.
+                    </p>
+                    <button
+                        style="padding:10px 20px;border:1px solid #4ecca3;border-radius:6px;background:#4ecca3;color:#0b0b14;cursor:pointer;font-size:14px;font-weight:600;"
+                        onclick="toggleNewAgent()"
+                    >+ New Agent</button>
+                `;
+                dashboard.appendChild(empty);
+            }
+
             for (const agent of agentList) {
                 const panel = createAgentPanel(agent);
                 dashboard.appendChild(panel);

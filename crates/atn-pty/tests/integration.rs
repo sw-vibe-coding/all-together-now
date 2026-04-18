@@ -215,3 +215,30 @@ async fn session_manager_lifecycle() {
     // Shutting down a removed agent should error.
     assert!(mgr.shutdown_agent(&id).await.is_err());
 }
+
+#[tokio::test]
+async fn empty_start_loads_zero_agents() {
+    use atn_core::config::load_project_config;
+    use atn_pty::manager::SessionManager;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg_path = tmp.path().join("agents.toml");
+    std::fs::write(
+        &cfg_path,
+        r#"[project]
+name = "empty-start-test"
+"#,
+    )
+    .unwrap();
+
+    let project_config = load_project_config(&cfg_path).expect("empty agents.toml parses");
+    assert_eq!(project_config.project.name, "empty-start-test");
+    assert!(project_config.agents.is_empty());
+
+    let mut mgr = SessionManager::new(None);
+    for entry in &project_config.agents {
+        let _ = mgr.spawn_agent(entry.to_agent_config(tmp.path()));
+    }
+    assert!(mgr.is_empty());
+    assert_eq!(mgr.len(), 0);
+}

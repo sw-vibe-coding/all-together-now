@@ -51,6 +51,8 @@ pub fn app() -> Html {
         .clone()
         .or_else(|| agents.first().map(|a| a.id.clone()));
 
+    let on_new_agent = Callback::from(|_: MouseEvent| new_agent_clicked());
+
     html! {
         <div class="app">
             <header>
@@ -58,6 +60,9 @@ pub fn app() -> Html {
                 <span class="agent-count">
                     { format!("{} agent{}", agents.len(), if agents.len() != 1 { "s" } else { "" }) }
                 </span>
+                <button class="btn-new-agent" onclick={on_new_agent.clone()}>
+                    { "+ New Agent" }
+                </button>
                 <div class="view-tabs">
                     <button
                         class={classes!("view-tab", (*view == ViewMode::Agents).then_some("active"))}
@@ -70,32 +75,57 @@ pub fn app() -> Html {
                 </div>
             </header>
             if *view == ViewMode::Agents {
-                <nav class="agent-tabs">
-                    { for agents.iter().map(|a| {
-                        let id = a.id.clone();
-                        let is_active = current_agent.as_deref() == Some(&a.id);
-                        let on_click = {
-                            let on_select = on_select.clone();
-                            let id = id.clone();
-                            Callback::from(move |_: MouseEvent| on_select.emit(id.clone()))
-                        };
-                        html! {
-                            <button
-                                class={classes!("tab", is_active.then_some("active"))}
-                                onclick={on_click}
-                            >
-                                { &a.name }
-                                <span class="tab-role">{ &a.role }</span>
-                            </button>
-                        }
-                    })}
-                </nav>
-                if let Some(agent_id) = current_agent {
-                    <AgentPanel id={agent_id} />
+                if agents.is_empty() {
+                    <EmptyAgentsState on_new_agent={on_new_agent} />
+                } else {
+                    <nav class="agent-tabs">
+                        { for agents.iter().map(|a| {
+                            let id = a.id.clone();
+                            let is_active = current_agent.as_deref() == Some(&a.id);
+                            let on_click = {
+                                let on_select = on_select.clone();
+                                let id = id.clone();
+                                Callback::from(move |_: MouseEvent| on_select.emit(id.clone()))
+                            };
+                            html! {
+                                <button
+                                    class={classes!("tab", is_active.then_some("active"))}
+                                    onclick={on_click}
+                                >
+                                    { &a.name }
+                                    <span class="tab-role">{ &a.role }</span>
+                                </button>
+                            }
+                        })}
+                    </nav>
+                    if let Some(agent_id) = current_agent {
+                        <AgentPanel id={agent_id} />
+                    }
                 }
             } else {
                 <WikiBrowser />
             }
+        </div>
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct EmptyAgentsStateProps {
+    on_new_agent: Callback<MouseEvent>,
+}
+
+#[function_component(EmptyAgentsState)]
+fn empty_agents_state(props: &EmptyAgentsStateProps) -> Html {
+    html! {
+        <div class="empty-state">
+            <h2>{ "No agents yet" }</h2>
+            <p>
+                { "ATN is running but no agents are configured. Add one to start—\
+                   pick a host (local or remote), working directory, and the agent CLI to run." }
+            </p>
+            <button class="btn-new-agent-primary" onclick={props.on_new_agent.clone()}>
+                { "+ New Agent" }
+            </button>
         </div>
     }
 }
@@ -219,3 +249,16 @@ fn send_ctrl_c(agent_id: &str) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn send_ctrl_c(_agent_id: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn new_agent_clicked() {
+    if let Some(win) = web_sys::window() {
+        let _ = win.alert_with_message(
+            "New Agent dialog arrives in the next step. For now, use the + Agent \
+             form on the static dashboard at /index.html.",
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn new_agent_clicked() {}

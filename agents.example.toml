@@ -1,0 +1,30 @@
+# Example agents.toml — copy to agents.toml and edit, or add agents from the UI.
+#
+# The canonical agents.toml in this repo is intentionally empty:
+# ATN boots with zero agents and you compose them through the "New Agent"
+# dialog in the web UI. This file is kept for reference only.
+
+[project]
+name = "all-together-now"
+log_dir = ".atn/logs"
+
+[[agent]]
+id = "alice"
+name = "Alice (Frontend)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"
+
+[[agent]]
+id = "bob"
+name = "Bob (Backend)"
+repo_path = "."
+role = "developer"
+launch_command = "bash"
+
+[[agent]]
+id = "carol"
+name = "Carol (QA)"
+repo_path = "."
+role = "qa"
+launch_command = "bash"
