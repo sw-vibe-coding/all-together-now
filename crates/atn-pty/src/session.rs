@@ -205,6 +205,21 @@ impl PtySession {
         self.state.clone()
     }
 
+    /// Kill the PTY child immediately without the graceful Ctrl-C sequence.
+    ///
+    /// Used by the "reconnect" flow for remote agents: we want to drop the
+    /// local `mosh`/`ssh` process cleanly and respawn it (which re-attaches
+    /// to the still-running tmux session on the remote host), without firing
+    /// a stray Ctrl-C into whatever's running inside tmux.
+    pub async fn hard_kill(&mut self) -> Result<()> {
+        self.child
+            .kill()
+            .map_err(|e| AtnError::Pty(format!("kill failed: {e}")))?;
+        let mut s = self.state.write().await;
+        *s = AgentState::Disconnected;
+        Ok(())
+    }
+
     /// Shut down the agent session.
     ///
     /// Sends Ctrl-C twice (1s apart), waits for exit, then kills if needed.

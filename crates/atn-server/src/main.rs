@@ -244,6 +244,7 @@ async fn main() {
         .route("/api/agents/{id}/resize", post(agent_resize))
         .route("/api/agents/{id}/state", get(agent_state))
         .route("/api/agents/{id}/restart", post(agent_restart))
+        .route("/api/agents/{id}/reconnect", post(agent_reconnect))
         .route("/api/agents/{id}/stop", post(stop_agent))
         .route("/api/saga", get(get_project_saga))
         .route("/api/saga/distill", post(saga_distill))
@@ -525,6 +526,42 @@ async fn agent_restart(
     Ok(StatusCode::OK)
 }
 
+/// Reconnect an agent by re-running its launch command without sending
+/// Ctrl-C to whatever was inside the old PTY. For mosh/ssh+tmux agents the
+/// composed command (`mosh USER@HOST -- tmux new-session -A -s atn-NAME ...`)
+/// naturally re-attaches to the still-running remote tmux session.
+async fn agent_reconnect(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let agent_id = AgentId(id.clone());
+
+    let config = {
+        let configs = state.agent_configs.lock().await;
+        configs.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    // Hard-kill any existing session (no Ctrl-C). The remote tmux lives on.
+    let old_session = {
+        let mut mgr = state.manager.lock().await;
+        mgr.remove_agent(&agent_id).ok()
+    };
+    if let Some(mut session) = old_session {
+        let _ = session.hard_kill().await;
+    }
+
+    {
+        let mut mgr = state.manager.lock().await;
+        mgr.spawn_agent(config).map_err(|e| {
+            tracing::error!("Failed to reconnect agent '{id}': {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+
+    tracing::info!("Reconnected agent: {id}");
+    Ok(StatusCode::OK)
+}
+
 // ── Agent CRUD ───────────────────────────────────────────────────────
 
 /// Request body for updating an agent's config.
@@ -673,6 +710,31 @@ async fn delete_agent(
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
     let agent_id = AgentId(id.clone());
+
+    // For remote (mosh/ssh+tmux) agents, send `C-b :kill-session <Enter>` over
+    // the PTY before tearing down so the tmux session doesn't survive on the
+    // remote host. Local agents skip this step.
+    let is_remote = state
+        .agent_specs
+        .lock()
+        .await
+        .get(&id)
+        .map(|s| s.transport != atn_core::spawn_spec::Transport::Local)
+        .unwrap_or(false);
+    if is_remote {
+        let tx = {
+            let mgr = state.manager.lock().await;
+            mgr.get_session(&agent_id).ok().map(|s| s.input_sender())
+        };
+        if let Some(tx) = tx {
+            let _ = tx
+                .send(InputEvent::RawBytes {
+                    bytes: b"\x02:kill-session\r".to_vec(),
+                })
+                .await;
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
 
     // Remove session.
     let old_session = {

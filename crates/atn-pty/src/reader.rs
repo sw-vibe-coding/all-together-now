@@ -28,5 +28,9 @@ pub fn spawn_reader_task(
                 }
             }
         }
+        // Loop exited → EOF or hard read error. In both cases the child/PTY
+        // is gone. Emit a single Disconnected signal so downstream state
+        // trackers can flip the agent to Disconnected.
+        let _ = tx.send(OutputSignal::Disconnected);
     })
 }

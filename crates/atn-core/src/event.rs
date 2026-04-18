@@ -28,6 +28,10 @@ pub enum OutputSignal {
     QuestionDetected { snippet: String },
     IdleDetected,
     PushEvent(PushEvent),
+    /// Reader hit EOF or an error on the PTY master. The child has exited or
+    /// the transport dropped; the agent should transition to Disconnected and
+    /// the UI should offer a reconnect affordance.
+    Disconnected,
 }
 
 /// A structured inter-agent push event.

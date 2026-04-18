@@ -216,6 +216,164 @@ async fn session_manager_lifecycle() {
     assert!(mgr.shutdown_agent(&id).await.is_err());
 }
 
+/// Run the composed shell command from a SpawnSpec through a fake `mosh`/`ssh`
+/// on PATH and return the recorded argv lines. Asserts exit code 0.
+fn run_with_fake_transport(spec: &atn_core::spawn_spec::SpawnSpec) -> Vec<String> {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::process::Command;
+
+    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fake_mosh = workspace_root.join("tools").join("fake-mosh");
+    assert!(
+        fake_mosh.exists(),
+        "tools/fake-mosh missing at {}",
+        fake_mosh.display()
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let bin_dir = tmp.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    // Both transports back to the same recorder.
+    symlink(&fake_mosh, bin_dir.join("mosh")).unwrap();
+    symlink(&fake_mosh, bin_dir.join("ssh")).unwrap();
+
+    let log_path = tmp.path().join("argv.log");
+    let composed = spec.compose_command();
+
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{old_path}", bin_dir.display());
+
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(&composed)
+        .env("PATH", new_path)
+        .env("ATN_FAKE_MOSH_LOG", &log_path)
+        .env("ATN_FAKE_MOSH_BANNER", "fake transport banner")
+        .output()
+        .expect("bash -c failed");
+    assert!(
+        out.status.success(),
+        "bash -c {composed:?} exited {}: stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let log = fs::read_to_string(&log_path).unwrap_or_default();
+    log.lines()
+        .filter_map(|l| l.strip_prefix("arg=").map(|s| s.to_string()))
+        .collect()
+}
+
+#[tokio::test]
+async fn remote_mosh_transport_records_expected_argv() {
+    use atn_core::spawn_spec::{SpawnSpec, Transport};
+
+    let spec = SpawnSpec {
+        name: "worker-hlasm".to_string(),
+        role: "worker".to_string(),
+        transport: Transport::Mosh,
+        host: Some("queenbee".to_string()),
+        user: Some("devh1".to_string()),
+        working_dir: "/home/devh1/work/hlasm".to_string(),
+        project: Some("hlasm".to_string()),
+        agent: "codex".to_string(),
+        agent_args: None,
+    };
+
+    let argv = run_with_fake_transport(&spec);
+    assert_eq!(
+        argv,
+        vec![
+            "devh1@queenbee",
+            "--",
+            "tmux",
+            "new-session",
+            "-A",
+            "-s",
+            "atn-worker-hlasm",
+            "cd /home/devh1/work/hlasm && codex",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn remote_ssh_transport_records_expected_argv() {
+    use atn_core::spawn_spec::{SpawnSpec, Transport};
+
+    let spec = SpawnSpec {
+        name: "worker-rpg".to_string(),
+        role: "worker".to_string(),
+        transport: Transport::Ssh,
+        host: Some("queenbee".to_string()),
+        user: Some("devr1".to_string()),
+        working_dir: "/home/devr1/work/rpg-ii".to_string(),
+        project: None,
+        agent: "opencode-z-ai-glm-5".to_string(),
+        agent_args: Some("--resume".to_string()),
+    };
+
+    let argv = run_with_fake_transport(&spec);
+    assert_eq!(
+        argv,
+        vec![
+            "devr1@queenbee",
+            "--",
+            "tmux",
+            "new-session",
+            "-A",
+            "-s",
+            "atn-worker-rpg",
+            "cd /home/devr1/work/rpg-ii && opencode-z-ai-glm-5 --resume",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn pty_exit_sets_disconnected_state() {
+    use atn_core::agent::{AgentConfig, AgentId, AgentRole};
+    use atn_pty::manager::SessionManager;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut mgr = SessionManager::new(None);
+
+    // Launch command `exit 0` makes the shell quit immediately, causing EOF
+    // on the PTY reader and flipping state to Disconnected.
+    let config = AgentConfig {
+        id: AgentId("exit-quick".to_string()),
+        name: "exit-quick".to_string(),
+        repo_path: tmp.path().to_path_buf(),
+        role: AgentRole::Developer,
+        setup_commands: vec![],
+        launch_command: "exit 0".to_string(),
+    };
+
+    let id = mgr.spawn_agent(config).unwrap();
+
+    // Give the session a moment to type `exit 0` and for the shell to close.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    loop {
+        let state_arc = {
+            let sess = mgr.get_session(&id).unwrap();
+            sess.state()
+        };
+        let s = state_arc.read().await.clone();
+        if matches!(s, atn_core::agent::AgentState::Disconnected) {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("agent never transitioned to Disconnected; last state = {s:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let _ = mgr.shutdown_agent(&id).await;
+}
+
 #[tokio::test]
 async fn empty_start_loads_zero_agents() {
     use atn_core::config::load_project_config;

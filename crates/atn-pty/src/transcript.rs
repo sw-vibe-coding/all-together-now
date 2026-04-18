@@ -73,6 +73,10 @@ impl TranscriptWriter {
                 "event": pe,
                 "ts": chrono::Utc::now().to_rfc3339(),
             }),
+            OutputSignal::Disconnected => serde_json::json!({
+                "type": "disconnected",
+                "ts": chrono::Utc::now().to_rfc3339(),
+            }),
         };
 
         let mut f = OpenOptions::new()

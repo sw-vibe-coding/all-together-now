@@ -61,6 +61,10 @@ pub fn spawn_state_tracker(
                             }
                         }
                         Ok(OutputSignal::PushEvent(_)) => {}
+                        Ok(OutputSignal::Disconnected) => {
+                            let mut s = state.write().await;
+                            *s = AgentState::Disconnected;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             tracing::debug!("State tracker lagged by {n} messages");
                         }

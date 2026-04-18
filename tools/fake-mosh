@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Fake mosh: records its argv (one per line) to $ATN_FAKE_MOSH_LOG and
+# prints a short banner so callers see some output. Used by unit tests to
+# assert that SpawnSpec::compose_command() builds the expected argv without
+# needing a real rack server.
+#
+# Also usable as fake-ssh — the same script can back both invocations. The
+# test harness creates symlinks as needed.
+
+log_file="${ATN_FAKE_MOSH_LOG:-/tmp/fake-mosh.log}"
+
+{
+    printf 'argv[0]=%s\n' "$0"
+    for arg in "$@"; do
+        printf 'arg=%s\n' "$arg"
+    done
+    printf '---\n'
+} >> "$log_file"
+
+banner="${ATN_FAKE_MOSH_BANNER:-fake-mosh: connected}"
+printf '%s\n' "$banner"
+exit 0
