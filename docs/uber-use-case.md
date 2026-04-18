@@ -150,19 +150,55 @@ anything ATN has to enforce itself.
 - **Runtime composition.** Start empty, add agents as the work demands, tear
   them down when done. No static cluster config.
 
-## Implementation Notes (for follow-up work)
+## Implementation Notes (what now exists)
 
-- Empty-start: `atn-server` must come up cleanly with no agents registered;
-  the UI must render the empty state and surface the **New Agent** affordance.
-- New Agent dialog: form fields above, validated client-side; POST to a
-  new `POST /agents` endpoint that spawns the PTY and returns the new agent's
-  id + initial state.
-- Command field is a free-form shell command so users can compose
-  `mosh ... -- tmux ... -- cd ... && <agent-cli>` without ATN needing to
-  understand mosh or tmux.
-- Remote `cwd` is advisory (the command itself does the `cd`); local `cwd`
-  is applied before spawn.
-- Graceful removal: closing an agent should terminate the PTY cleanly (mosh
-  + tmux survives the mosh disconnect on the server side, which is the point
-  -- reconnecting re-attaches to the same tmux session and the agent CLI
-  keeps running).
+This section was originally a sketch for follow-up work; it now reflects
+what the remote-agent demo saga actually landed.
+
+- **Empty-start** — `atn-server` boots cleanly with zero agents. The
+  shipped `agents.toml` has only `[project]`; the legacy seed is preserved
+  as `agents.example.toml` for reference. The Yew UI and the static HTML
+  dashboard both render a deliberate empty state with a **+ New Agent**
+  call-to-action. See `docs/usage.md § Quick Start`.
+- **Structured New Agent dialog** — instead of a free-form command field,
+  the dialog captures a `SpawnSpec` (name, role, transport ∈ local/mosh/
+  ssh, host, user, working_dir, project, agent, agent_args). The server
+  composes the shell command from those parts:
+  - local: `cd <working_dir> && <agent> [agent_args]`
+  - mosh/ssh: `<bin> <user>@<host> -- tmux new-session -A -s atn-<name>
+    'cd <working_dir> && <agent> [agent_args]'`
+  Validation rejects missing fields per transport and injection-prone
+  characters. Implementation: `crates/atn-core/src/spawn_spec.rs`. The
+  POST endpoint is `POST /api/agents`; see
+  `docs/usage.md § REST API Reference` for the full surface.
+- **Reconnect after network drop** — `POST /api/agents/{id}/reconnect`
+  hard-kills the local mosh/ssh child without sending Ctrl-C, then
+  respawns the same composed command. Because the mosh/ssh template uses
+  `tmux new-session -A -s atn-<name>`, the respawn re-attaches to the
+  still-running remote tmux session and in-progress agent work survives.
+  PTY exit detection flips state to `Disconnected` via a new
+  `OutputSignal::Disconnected` signal. Manual walkthrough:
+  `docs/remote-pty.md`.
+- **Graceful remote delete** — `DELETE /api/agents/{id}` consults the
+  stored `SpawnSpec`; for mosh/ssh agents it sends `^B :kill-session
+  <Enter>` over the PTY before the usual shutdown, so the remote tmux
+  session is cleaned up server-side.
+- **Three-agent topology as CI** — `crates/atn-server/tests/
+  three_agent_demo.rs` spawns the real binary on an ephemeral
+  (`ATN_PORT=0`) port with `tools/` on PATH, POSTs three local-variant
+  SpawnSpecs backed by `tools/fake-{claude,codex,opencode-glm5}`, and
+  asserts router delivery of coordinator→worker events. The real
+  (mosh-to-queenbee) topology lives in `demos/three-agent/fixtures/*.json`
+  and is driven by `demos/three-agent/setup.sh`
+  (`ATN_DEMO_REAL=1` to flip from fake shims to real CLIs).
+
+## See also
+
+- [docs/usage.md](./usage.md) — operational guide: empty-start,
+  New Agent dialog, REST surface, environment variables.
+- [docs/demo-three-agent.md](./demo-three-agent.md) — end-to-end
+  walkthrough of the exact topology described above.
+- [docs/remote-pty.md](./remote-pty.md) — manual test for real mosh+tmux
+  sessions to queenbee, reconnect, and cleanup.
+- [docs/status.md](./status.md) — project status, what's shipped.
+- [docs/architecture.md](./architecture.md) — crate layout and design.

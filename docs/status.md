@@ -1,8 +1,31 @@
 # All Together Now — Status
 
-## Current State: Phase 8 Complete + Demo & Replay Tooling
+## Current State: Remote-Agent Demo Saga Complete
 
-All 8 phases implemented. End-to-end multi-agent demo working with reg-rs regression test.
+Phases 0–8 shipped plus the follow-on **remote-agent demo saga** (5 steps,
+all shipped in this sequence):
+
+1. **empty-start** — ATN boots with zero agents; UI renders empty state
+   with a + New Agent CTA. `agents.toml` defaults to `[project]`-only; seed
+   preserved as `agents.example.toml`.
+2. **new-agent-dialog** — structured `SpawnSpec` (name/role/transport/
+   host/user/working_dir/project/agent/agent_args) in `atn-core`; `POST
+   /api/agents` validates and composes shell commands for local/mosh/ssh.
+   Both the Yew modal and the static HTML form use the same schema.
+3. **remote-pty-transport** — `OutputSignal::Disconnected` signal pipes
+   PTY EOF → `AgentState::Disconnected`; `POST /api/agents/{id}/reconnect`
+   re-attaches to remote tmux; graceful delete sends `^B :kill-session` to
+   clean up tmux server-side. `tools/fake-mosh` + symlinks back the
+   integration tests.
+4. **three-agent-demo** — `tools/fake-claude`, `tools/fake-codex`,
+   `tools/fake-opencode-glm5` shims; `demos/three-agent/fixtures/*.json`
+   + `setup.sh` (`ATN_DEMO_REAL=1` for real CLIs); `ATN_PORT` env +
+   `atn-server ready on <addr>` stdout marker; `crates/atn-server/tests/
+   three_agent_demo.rs` end-to-end integration test.
+5. **docs-refresh** — this doc + `docs/usage.md`, `docs/demo-three-agent.md`,
+   `docs/uber-use-case.md` cross-links, README quickstart.
+
+End-to-end multi-agent demo working with reg-rs regression test.
 
 ## What Exists
 
@@ -30,6 +53,11 @@ All 8 phases implemented. End-to-end multi-agent demo working with reg-rs regres
 | 7 | Polish: shutdown, restart, graph, notifications, hot-reload | Done |
 | 8 | Session management UI (agent CRUD from browser) | Done |
 | — | Demo, input logging, atn-replay crate | Done |
+| R1 | Empty-start: boot with zero agents | Done |
+| R2 | New Agent dialog: structured SpawnSpec + compose | Done |
+| R3 | Remote PTY transport: reconnect + tmux cleanup | Done |
+| R4 | Three-agent demo: fake shims + integration test | Done |
+| R5 | Docs refresh: usage, demo walkthrough, cross-links | Done |
 
 ## Demo
 
