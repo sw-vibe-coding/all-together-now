@@ -1024,6 +1024,7 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
     let manager = state.manager.clone();
     let agent_configs = state.agent_configs.clone();
     let agent_repo_paths = state.agent_repo_paths.clone();
+    let agent_specs = state.agent_specs.clone();
 
     tokio::spawn(async move {
         // Debounce: wait 500ms after last event before reloading.
@@ -1073,14 +1074,29 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
                 .cloned()
                 .collect();
 
-            // Update all configs and repo paths.
+            // Update all configs, repo paths, and specs.
             {
                 let mut configs = agent_configs.lock().await;
                 let mut repo_paths = agent_repo_paths.lock().await;
+                let mut specs = agent_specs.lock().await;
                 for entry in &new_config.agents {
                     let config = entry.to_agent_config(&base_dir);
                     repo_paths.insert(entry.id.clone(), config.repo_path.clone());
                     configs.insert(entry.id.clone(), config);
+                    match &entry.spec {
+                        Some(s) => {
+                            specs.insert(entry.id.clone(), s.clone());
+                        }
+                        None => {
+                            // Entry no longer has a spec — drop any stale
+                            // one so saved TOML stops round-tripping it.
+                            specs.remove(&entry.id);
+                        }
+                    }
+                }
+                // Drop specs for agents removed from the config entirely.
+                for id in &to_remove {
+                    specs.remove(id);
                 }
             }
 
