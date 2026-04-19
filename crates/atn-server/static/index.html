@@ -387,14 +387,22 @@
 
             const sk = stateKey(agent.state);
 
+            // Compose a tooltip so hover reveals the shell command ATN is running.
+            const launchTip = agent.launch_command
+                ? agent.launch_command.replace(/"/g, '&quot;')
+                : `${agent.name}`;
+
             panel.innerHTML = `
                 <div class="agent-header">
-                    <span class="agent-name">${agent.name}</span>
+                    <span class="agent-name" title="${launchTip}">${agent.name}</span>
                     <span class="agent-role">${agent.role}</span>
                     <span id="saga-badge-${agent.id}" style="font-size:11px;color:#a78bfa;"></span>
                     <span class="spacer"></span>
                     <span class="conn-dot disconnected" id="conn-${agent.id}"></span>
                     <span class="state-badge state-${sk}" id="badge-${agent.id}">${stateLabel(agent.state)}</span>
+                </div>
+                <div class="agent-launch" id="launch-${agent.id}" title="${launchTip}" style="font-family:monospace;font-size:10px;color:#6b7280;padding:2px 8px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    ${agent.launch_command || '&nbsp;'}
                 </div>
                 <div class="agent-terminal" id="term-${agent.id}"></div>
                 <div class="agent-controls">
