@@ -175,9 +175,13 @@ async fn main() {
 
     // Build agent configs and spawn sessions.
     let mut agent_configs_map: HashMap<String, AgentConfig> = HashMap::new();
+    let mut agent_specs_map: HashMap<String, SpawnSpec> = HashMap::new();
     for entry in &project_config.agents {
         let config = entry.to_agent_config(&base_dir);
         agent_configs_map.insert(entry.id.clone(), config.clone());
+        if let Some(spec) = &entry.spec {
+            agent_specs_map.insert(entry.id.clone(), spec.clone());
+        }
         match manager.spawn_agent(config) {
             Ok(id) => tracing::info!("Spawned agent: {id} ({})", entry.name),
             Err(e) => tracing::error!("Failed to spawn agent '{}': {e}", entry.id),
@@ -221,7 +225,7 @@ async fn main() {
         event_log,
         agent_repo_paths: Arc::new(Mutex::new(agent_repo_paths)),
         agent_configs: Arc::new(Mutex::new(agent_configs_map)),
-        agent_specs: Arc::new(Mutex::new(HashMap::new())),
+        agent_specs: Arc::new(Mutex::new(agent_specs_map)),
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
     };
@@ -865,6 +869,7 @@ async fn stop_agent(
 /// Save current agent configs back to agents.toml.
 async fn save_config(State(state): State<AppState>) -> Result<StatusCode, (StatusCode, String)> {
     let configs = state.agent_configs.lock().await;
+    let specs = state.agent_specs.lock().await;
 
     let agents: Vec<atn_core::config::AgentEntry> = configs
         .values()
@@ -880,13 +885,23 @@ async fn save_config(State(state): State<AppState>) -> Result<StatusCode, (Statu
             } else {
                 repo_path
             };
+            let spec = specs.get(&c.id.0).cloned();
+            // For spec-backed agents, blank the flat launch_command so the
+            // serialized TOML is clean — on load, to_agent_config recomposes
+            // the command from the spec anyway.
+            let launch_command = if spec.is_some() {
+                String::new()
+            } else {
+                c.launch_command.clone()
+            };
             atn_core::config::AgentEntry {
                 id: c.id.0.clone(),
                 name: c.name.clone(),
                 repo_path,
                 role: c.role.clone(),
                 setup_commands: c.setup_commands.clone(),
-                launch_command: c.launch_command.clone(),
+                launch_command,
+                spec,
             }
         })
         .collect();
