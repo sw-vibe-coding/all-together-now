@@ -1,3 +1,4 @@
+mod heat;
 mod router;
 
 use std::convert::Infallible;
@@ -45,6 +46,8 @@ struct SharedState {
     /// Original structured spawn spec for agents created via the New Agent dialog.
     /// Absent for agents loaded from agents.toml (which only has the flat shape).
     agent_specs: Arc<Mutex<HashMap<String, SpawnSpec>>>,
+    /// Per-agent activity heat for the scale-UI treemap.
+    heat: heat::HeatMap,
     /// Base directory for resolving relative paths.
     base_dir: PathBuf,
     /// Path to agents.toml for saving config.
@@ -219,6 +222,17 @@ async fn main() {
     );
     tracing::info!("Message router started (polling every 2s)");
 
+    let heat_map = heat::new_heat_map();
+    // Spawn a heat tracker for every agent that made it up through startup.
+    {
+        let mgr = manager.lock().await;
+        for id in mgr.agent_ids() {
+            if let Ok(session) = mgr.get_session(id) {
+                heat::spawn_heat_tracker(session.output_receiver(), heat_map.clone(), id.0.clone());
+            }
+        }
+    }
+
     let state = SharedState {
         manager: manager.clone(),
         wiki,
@@ -226,6 +240,7 @@ async fn main() {
         agent_repo_paths: Arc::new(Mutex::new(agent_repo_paths)),
         agent_configs: Arc::new(Mutex::new(agent_configs_map)),
         agent_specs: Arc::new(Mutex::new(agent_specs_map)),
+        heat: heat_map,
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
     };
@@ -237,6 +252,7 @@ async fn main() {
         .route("/", get(index_handler))
         .route("/api/agents", get(list_agents).post(create_agent))
         .route("/api/agents/graph", get(agent_dependency_graph))
+        .route("/api/agents/heat", get(list_agents_heat))
         .route("/api/agents/save", post(save_config))
         .route(
             "/api/agents/{id}",
@@ -375,6 +391,55 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
         });
     }
     Json(agents)
+}
+
+/// Returns one `HeatInfo` per live agent, driving the scale-UI treemap.
+async fn list_agents_heat(State(state): State<AppState>) -> Json<Vec<heat::HeatInfo>> {
+    // Snapshot current agent states without holding the manager lock across
+    // the state RwLock await calls.
+    let agent_state_handles: Vec<(String, Arc<tokio::sync::RwLock<AgentState>>)> = {
+        let mgr = state.manager.lock().await;
+        mgr.agent_ids()
+            .iter()
+            .filter_map(|id| {
+                mgr.get_session(id)
+                    .ok()
+                    .map(|s| (id.0.clone(), s.state()))
+            })
+            .collect()
+    };
+
+    // Hold the write lock across the read so we can decay every entry to
+    // the current instant — the EWMA is update-driven, so a quiet agent's
+    // rate only moves when someone rolls the clock forward.
+    let mut heat_guard = state.heat.lock().await;
+    let now = std::time::Instant::now();
+    for h in heat_guard.values_mut() {
+        h.update(0, now);
+    }
+
+    let mut out = Vec::with_capacity(agent_state_handles.len());
+    for (id, state_arc) in agent_state_handles {
+        let agent_state = state_arc.read().await.clone();
+        let boost = heat::state_boost(&agent_state);
+        let (score, bytes_per_sec) = match heat_guard.get(&id) {
+            Some(h) => (heat::compute_score(h, &agent_state), h.bytes_per_sec),
+            None => {
+                // Heat tracker hasn't spawned yet or it exited early. Report
+                // a zero-activity entry so the UI can still place the tile.
+                let empty = heat::HeatState::new(now);
+                (heat::compute_score(&empty, &agent_state), 0.0)
+            }
+        };
+        out.push(heat::HeatInfo {
+            id,
+            heat: score,
+            bytes_per_sec,
+            state_boost: boost,
+        });
+    }
+
+    Json(out)
 }
 
 /// Returns current state for a single agent.
@@ -536,8 +601,25 @@ async fn agent_restart(
         })?;
     }
 
+    rearm_heat_tracker(&state, &id).await;
+
     tracing::info!("Restarted agent: {id}");
     Ok(StatusCode::OK)
+}
+
+/// (Re)attach a heat tracker to an agent's current output stream. Called
+/// whenever we spawn or respawn a session. If a tracker was already running
+/// on the previous session, its channel has since closed, so it will drain
+/// and exit on its own.
+async fn rearm_heat_tracker(state: &AppState, id: &str) {
+    let mgr = state.manager.lock().await;
+    if let Ok(session) = mgr.get_session(&AgentId(id.to_string())) {
+        heat::spawn_heat_tracker(
+            session.output_receiver(),
+            state.heat.clone(),
+            id.to_string(),
+        );
+    }
 }
 
 /// Reconnect an agent by re-running its launch command without sending
@@ -571,6 +653,8 @@ async fn agent_reconnect(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
+
+    rearm_heat_tracker(&state, &id).await;
 
     tracing::info!("Reconnected agent: {id}");
     Ok(StatusCode::OK)
@@ -678,6 +762,8 @@ async fn create_agent(
         })?;
     }
 
+    rearm_heat_tracker(&state, &id).await;
+
     {
         let mut configs = state.agent_configs.lock().await;
         configs.insert(id.clone(), config.clone());
@@ -761,7 +847,7 @@ async fn delete_agent(
     let mut session = old_session;
     let _ = session.shutdown().await;
 
-    // Remove from config, repo paths, and specs.
+    // Remove from config, repo paths, specs, and heat map.
     {
         let mut configs = state.agent_configs.lock().await;
         configs.remove(&id);
@@ -773,6 +859,10 @@ async fn delete_agent(
     {
         let mut specs = state.agent_specs.lock().await;
         specs.remove(&id);
+    }
+    {
+        let mut heat = state.heat.lock().await;
+        heat.remove(&id);
     }
 
     tracing::info!("Deleted agent: {id}");
@@ -1025,6 +1115,7 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
     let agent_configs = state.agent_configs.clone();
     let agent_repo_paths = state.agent_repo_paths.clone();
     let agent_specs = state.agent_specs.clone();
+    let heat_map = state.heat.clone();
 
     tokio::spawn(async move {
         // Debounce: wait 500ms after last event before reloading.
@@ -1100,14 +1191,33 @@ fn spawn_config_watcher(config_path: PathBuf, base_dir: PathBuf, state: SharedSt
                 }
             }
 
+            // Drop heat entries for removed agents.
+            {
+                let mut heat = heat_map.lock().await;
+                for id in &to_remove {
+                    heat.remove(id);
+                }
+            }
+
             // Spawn newly added agents.
             // Each spawn_agent call is done in a scope that drops the lock before the next.
             for entry in &to_add {
                 let config = entry.to_agent_config(&base_dir);
                 let id = entry.id.clone();
-                let result = manager.lock().await.spawn_agent(config);
-                match result {
-                    Ok(_) => tracing::info!("Hot-reload: added agent '{id}'"),
+                let spawn_result = manager.lock().await.spawn_agent(config);
+                match spawn_result {
+                    Ok(_) => {
+                        tracing::info!("Hot-reload: added agent '{id}'");
+                        // Attach a fresh heat tracker for the new session.
+                        let mgr_guard = manager.lock().await;
+                        if let Ok(session) = mgr_guard.get_session(&AgentId(id.clone())) {
+                            heat::spawn_heat_tracker(
+                                session.output_receiver(),
+                                heat_map.clone(),
+                                id.clone(),
+                            );
+                        }
+                    }
                     Err(e) => {
                         tracing::error!("Hot-reload: failed to spawn agent '{id}': {e}");
                     }
