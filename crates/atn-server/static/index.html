@@ -35,8 +35,13 @@
         .state-error       { background: #7f1d1d; color: #f87171; }
         .state-disconnected { background: #1f2937; color: #6b7280; }
 
-        .agent-terminal { flex: 1; min-height: 0; background: #0d1117; cursor: text; overflow: auto; }
+        .agent-terminal { flex: 1; min-height: 0; background: #0d1117; cursor: text; overflow: hidden; position: relative; }
         .agent-terminal:focus-within { outline: 1px solid #e94560; outline-offset: -1px; }
+        /* Visual scaler around xterm. xterm always renders at native rows*cols
+           (no fit-addon after spawn); this wrapper applies a discrete
+           scale so tile size changes are pure DOM work and the PTY never
+           sees layout churn. */
+        .term-scale { position: absolute; top: 0; left: 0; transform-origin: top left; transform: scale(var(--term-k, 1)); }
         .agent-controls { display: flex; gap: 6px; padding: 6px 8px; align-items: center; border-top: 1px solid #0f3460; flex-shrink: 0; }
         .agent-controls input { flex: 1; padding: 6px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-family: monospace; font-size: 13px; outline: none; }
         .agent-controls input:focus { border-color: #e94560; }
@@ -529,6 +534,145 @@
             console.log('swap-to-focus', e.detail);
         });
 
+        // --- CSS-scaled xterm layout ---
+        //
+        // xterm renders at fixed native geometry (TERM_NATIVE_COLS x
+        // TERM_NATIVE_ROWS). Each panel's `.term-scale` wrapper applies a
+        // discrete CSS transform so the tile's visible size tracks the
+        // allotted space without touching xterm or the PTY.
+        //
+        // TILE_SCALES are snap points chosen to keep monospace text crisp
+        // (integer or near-integer pixel steps feel much better than
+        // continuous scaling). Below COMPACT_THRESHOLD the tile drops to
+        // the compact-tile variant from step 2 instead of showing an
+        // unreadable xterm.
+
+        const TILE_SCALES = [0.25, 0.33, 0.5, 0.66, 0.8, 1.0];
+        const COMPACT_THRESHOLD = 0.25;
+
+        // Rough native pixel size of a 120x40 xterm at 13 px font. Not
+        // pixel-perfect — xterm internally picks cell width from the
+        // rendered font — but good enough for scale selection. The live
+        // measurement below refines it once xterm has rendered.
+        const TERM_NATIVE_W_DEFAULT = TERM_NATIVE_COLS * 8; // ~960 px
+        const TERM_NATIVE_H_DEFAULT = TERM_NATIVE_ROWS * 17; // ~680 px
+
+        /**
+         * Pick a discrete scale that fits a natW x natH box into a
+         * tileW x tileH box. Returns one of TILE_SCALES, or null if the
+         * natural size doesn't fit at any scale ≥ COMPACT_THRESHOLD (caller
+         * should switch to compact mode).
+         */
+        function pickTermScale(tileW, tileH, natW, natH) {
+            if (!(tileW > 0) || !(tileH > 0) || !(natW > 0) || !(natH > 0)) {
+                return null;
+            }
+            const raw = Math.min(tileW / natW, tileH / natH);
+            if (raw < COMPACT_THRESHOLD) return null;
+            // Largest snap point that still fits.
+            let chosen = TILE_SCALES[0];
+            for (const s of TILE_SCALES) {
+                if (s <= raw) chosen = s;
+            }
+            return chosen;
+        }
+
+        /** Measure xterm's actual native pixel size from its DOM, if rendered. */
+        function nativeTermSize(agentId) {
+            const node = document.getElementById(`term-${agentId}`);
+            if (!node || !node.firstChild) {
+                return { w: TERM_NATIVE_W_DEFAULT, h: TERM_NATIVE_H_DEFAULT };
+            }
+            const r = node.getBoundingClientRect();
+            // Fall back to the default if xterm hasn't measured yet (0x0).
+            const w = r.width > 0 ? r.width : TERM_NATIVE_W_DEFAULT;
+            const h = r.height > 0 ? r.height : TERM_NATIVE_H_DEFAULT;
+            return { w, h };
+        }
+
+        /**
+         * Walk every mounted xterm panel, compute its tile scale from the
+         * `.agent-terminal` host's current size, and either set a CSS
+         * scale (xterm mode) or flip the tile to compact (below threshold).
+         *
+         * Pure DOM — no fit-addon, no PTY resize. The focus agent (set via
+         * setFocus) is exempt: it stays at scale 1.0 and is the only tile
+         * that can trigger a PTY-side resize.
+         */
+        function updateTileScales() {
+            for (const [id, a] of agents.entries()) {
+                if (a.mode !== 'xterm') continue;
+                if (id === currentFocusId) {
+                    const scaleEl = document.getElementById(`term-scale-${id}`);
+                    if (scaleEl) scaleEl.style.setProperty('--term-k', '1');
+                    continue;
+                }
+                const host = document.getElementById(`term-tile-${id}`);
+                const scaleEl = document.getElementById(`term-scale-${id}`);
+                if (!host || !scaleEl) continue;
+                const hostRect = host.getBoundingClientRect();
+                const { w: natW, h: natH } = nativeTermSize(id);
+                const k = pickTermScale(hostRect.width, hostRect.height, natW, natH);
+                if (k === null) {
+                    // Too small for xterm — drop to compact automatically.
+                    toggleCompactMode(id);
+                } else {
+                    scaleEl.style.setProperty('--term-k', String(k));
+                }
+            }
+        }
+
+        /**
+         * Promote an agent to the focus slot. Only the focus tile gets a
+         * real fit-addon resize + PTY size sync. Step 4 will drive this
+         * from click events.
+         */
+        let currentFocusId = null;
+        function setFocus(agentId) {
+            currentFocusId = agentId;
+            const a = agents.get(agentId);
+            if (!a || !a.fitAddon) return;
+            // Reset this tile's scale and fit xterm to its container.
+            const scaleEl = document.getElementById(`term-scale-${agentId}`);
+            if (scaleEl) scaleEl.style.setProperty('--term-k', '1');
+            try {
+                a.fitAddon.fit();
+                syncPtySize(agentId, a.term);
+            } catch (_) { /* xterm not rendered yet; next call will work */ }
+            updateTileScales();
+        }
+
+        // --- pickTermScale self-test ---
+        //
+        // No JS test framework in the project, so the test runs on load
+        // and logs PASS/FAIL to the console. Touchpoints: result values,
+        // below-threshold → null, degenerate dims → null.
+        (function testPickTermScale() {
+            const cases = [
+                { in: [960, 680, 960, 680], want: 1.0, desc: 'exact native fit' },
+                { in: [480, 340, 960, 680], want: 0.5, desc: 'half-scale tile' },
+                { in: [400, 300, 960, 680], want: 0.33, desc: 'between 0.33 and 0.5 → 0.33' },
+                { in: [800, 600, 960, 680], want: 0.8, desc: 'just under 1.0' },
+                { in: [2000, 1500, 960, 680], want: 1.0, desc: 'caps at 1.0 even with headroom' },
+                { in: [200, 100, 960, 680], want: null, desc: 'below 0.25 threshold → null' },
+                { in: [0, 100, 960, 680], want: null, desc: 'zero-width → null' },
+                { in: [500, 500, 0, 680], want: null, desc: 'zero-native → null' },
+            ];
+            let fails = 0;
+            for (const c of cases) {
+                const got = pickTermScale(...c.in);
+                if (got !== c.want) {
+                    console.error(`pickTermScale FAIL: ${c.desc}: expected ${c.want}, got ${got}`);
+                    fails++;
+                }
+            }
+            if (fails === 0) {
+                console.log('pickTermScale: %d cases PASS', cases.length);
+            } else {
+                console.error(`pickTermScale: ${fails}/${cases.length} FAIL`);
+            }
+        })();
+
         const STATE_LABELS = {
             starting: 'Starting',
             running: 'Running',
@@ -576,7 +720,11 @@
                 <div class="agent-launch" id="launch-${agent.id}" title="${launchTip}" style="font-family:monospace;font-size:10px;color:#6b7280;padding:2px 8px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                     ${agent.launch_command || '&nbsp;'}
                 </div>
-                <div class="agent-terminal" id="term-${agent.id}"></div>
+                <div class="agent-terminal" id="term-tile-${agent.id}">
+                    <div class="term-scale" id="term-scale-${agent.id}">
+                        <div id="term-${agent.id}"></div>
+                    </div>
+                </div>
                 <div class="agent-controls">
                     <input type="text" id="input-${agent.id}" placeholder="Command for ${agent.name}...">
                     <button class="btn-send" data-agent="${agent.id}">Send</button>
@@ -608,11 +756,22 @@
             return panel;
         }
 
+        // Native xterm geometry. Every xterm renders at exactly these
+        // dimensions; tile size is decoupled via `.term-scale` CSS transform.
+        // Step 4 (treemap) respects these as the "crisp" size; when a tile
+        // is focused the scale is held at 1.0 and the PTY is resized to
+        // match. For every non-focused tile we never fit and never POST
+        // /api/agents/{id}/resize — layout churn is pure DOM.
+        const TERM_NATIVE_COLS = 120;
+        const TERM_NATIVE_ROWS = 40;
+
         function initTerminal(agentId) {
             const term = new Terminal({
                 cursorBlink: true,
                 fontSize: 13,
                 scrollback: 5000,
+                cols: TERM_NATIVE_COLS,
+                rows: TERM_NATIVE_ROWS,
                 fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
                 theme: {
                     background: '#0d1117',
@@ -621,12 +780,16 @@
                     selectionBackground: '#264f78',
                 },
             });
+            // fit-addon stays attached so the focus path can still snap an
+            // agent's xterm back to its container when promoted. It's no
+            // longer wired into the window-resize pipeline.
             const fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
 
             const container = document.getElementById(`term-${agentId}`);
             term.open(container);
-            fitAddon.fit();
+            // Tell the PTY about the native geometry exactly once. Subsequent
+            // layout changes only update CSS scale (see updateTileScales).
             syncPtySize(agentId, term);
             return { term, fitAddon };
         }
@@ -900,13 +1063,15 @@
             // Fetch per-agent saga step for badges
             pollAgentSagas(agentList.map(a => a.id));
 
-            // Handle resize
-            const fitAll = () => agents.forEach((a, id) => {
-                a.fitAddon.fit();
-                syncPtySize(id, a.term);
-            });
-            window.addEventListener('resize', fitAll);
-            new ResizeObserver(fitAll).observe(dashboard);
+            // Handle resize. xterm stays at its fixed native geometry
+            // (cols x rows set in initTerminal); updateTileScales adjusts
+            // the CSS `--term-k` per tile so the visible size tracks the
+            // allotted space. PTY-side resize is now strictly tied to
+            // setFocus; layout churn never reaches the PTY.
+            window.addEventListener('resize', updateTileScales);
+            new ResizeObserver(updateTileScales).observe(dashboard);
+            // Run once now so newly-spawned panels get their initial scale.
+            setTimeout(updateTileScales, 0);
 
             // Poll states
             setInterval(pollStates, 2000);
@@ -914,10 +1079,13 @@
             // Start heat polling for the scale-UI treemap + compact tiles.
             startHeatPolling();
 
-            // Expose the compact-tile dev toggle on window so it can be
-            // driven from devtools: `toggleCompactMode('worker-hlasm')`.
-            // Step 4 will replace this with size-driven auto-selection.
+            // Expose dev toggles on window so they can be driven from
+            // devtools before steps 4/5 wire them up for real. Step 4
+            // will replace these with size-driven auto-selection and the
+            // treemap's click-to-focus flow.
             window.toggleCompactMode = toggleCompactMode;
+            window.setFocus = setFocus;
+            window.pickTermScale = pickTermScale;
         }
 
         init();
@@ -1067,7 +1235,9 @@
             else if (count <= 2) dashboard.className = 'dashboard cols-2';
             else if (count <= 3) dashboard.className = 'dashboard cols-3';
             else dashboard.className = 'dashboard cols-4';
-            agents.forEach(a => a.fitAddon.fit());
+            // Grid columns changed — CSS scale needs to catch up. No fit,
+            // no PTY resize (that's setFocus's job).
+            updateTileScales();
         }
 
         function toggleConfig(agentId) {
