@@ -1,5 +1,8 @@
 # Three-Agent Demo Walkthrough
 
+> Looking for other demos? See [docs/demos-scripts.md](./demos-scripts.md)
+> for the full menu.
+
 End-to-end demonstration of the topology described in
 [docs/uber-use-case.md](./uber-use-case.md): a local coordinator on the Mac
 talking to two isolated remote workers on a rack server, each owning a

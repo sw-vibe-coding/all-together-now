@@ -58,6 +58,8 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | R3 | Remote PTY transport: reconnect + tmux cleanup | Done |
 | R4 | Three-agent demo: fake shims + integration test | Done |
 | R5 | Docs refresh: usage, demo walkthrough, cross-links | Done |
+| S1..S5 | Scale-UI saga: heat score, compact tile, CSS-scaled xterm, treemap, pin + keyboard | Done |
+| S6 | Demo scripts: docs/demos-scripts.md menu of runnable demos | Done |
 
 ## Demo
 

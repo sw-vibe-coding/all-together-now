@@ -10,6 +10,7 @@
   want to run agents on
 
 See also:
+- [Demo scripts](./demos-scripts.md) — every demo you can run against the current build, grouped by time + prereqs
 - [Uber use-case](./uber-use-case.md) — the isolation-first multi-agent story
 - [Three-agent demo walkthrough](./demo-three-agent.md)
 - [Remote PTY manual test](./remote-pty.md)

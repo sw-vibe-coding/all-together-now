@@ -194,6 +194,9 @@ what the remote-agent demo saga actually landed.
 
 ## See also
 
+- [docs/demos-scripts.md](./demos-scripts.md) — curated demo menu
+  (empty-start, three-agent, reconnect, treemap scale-UI, REST tour)
+  with setup / steps / what each one shows.
 - [docs/usage.md](./usage.md) — operational guide: empty-start,
   New Agent dialog, REST surface, environment variables.
 - [docs/demo-three-agent.md](./demo-three-agent.md) — end-to-end
