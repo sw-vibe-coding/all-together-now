@@ -18,6 +18,30 @@
         .dashboard.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
         .dashboard.cols-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
+        /* Pin row — horizontal strip above the dashboard showing agents the
+           user has explicitly pinned. Pinned agents are excluded from the
+           heat-sized treemap so their visible size stays stable. */
+        .pin-row { display: none; gap: 6px; padding: 6px 8px 0; overflow-x: auto; flex-shrink: 0; }
+        .pin-row.visible { display: flex; }
+        .pin-cell { flex: 0 0 auto; width: 180px; height: 82px; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; cursor: pointer; position: relative; }
+        .pin-cell:hover { border-color: #4ecca3; }
+        .pin-cell .pin-head { display: flex; align-items: center; gap: 4px; font-size: 11px; min-width: 0; }
+        .pin-cell .pin-name { font-weight: 600; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+        .pin-cell .pin-state { font-size: 10px; padding: 1px 5px; }
+        .pin-cell .pin-body { display: flex; align-items: center; gap: 4px; min-width: 0; }
+        .pin-cell .sparkline { flex-shrink: 0; width: 44px; height: 14px; }
+        .pin-cell .sparkline path { fill: none; stroke: #4ecca3; stroke-width: 1.5; }
+        .pin-cell .pin-lastline { flex: 1; min-width: 0; font-family: monospace; font-size: 9px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pin-cell .pin-unpin { position: absolute; top: 2px; right: 4px; font-size: 14px; color: #6b7280; cursor: pointer; line-height: 1; padding: 0 2px; background: transparent; border: none; }
+        .pin-cell .pin-unpin:hover { color: #e94560; }
+        .pin-cell .pin-icon { color: #fbbf24; flex-shrink: 0; font-size: 10px; }
+
+        /* Tile action buttons injected into agent-header + compact-head. */
+        .tile-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .tile-actions button { background: transparent; border: 1px solid #0f3460; color: #888; font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; }
+        .tile-actions button:hover { background: #0f3460; color: #c9d1d9; }
+        .tile-actions .btn-pin.pinned { color: #fbbf24; border-color: #fbbf24; }
+
         /* Treemap mode: dashboard becomes an absolutely-positioned canvas.
            Tiles get their inset from computeLayout(). Smooth transitions
            keep the layout from feeling jittery at the 1.5s refresh cadence. */
@@ -325,6 +349,7 @@
             </div>
         </div>
     </div>
+    <div class="pin-row" id="pin-row"></div>
     <div class="dashboard" id="dashboard"></div>
     <div class="wiki-container" id="wiki-view" style="display:none;">
         <div class="wiki-sidebar">
@@ -509,13 +534,17 @@
 
         function refreshCompactIfPresent(agentId) {
             const tile = document.getElementById(`compact-${agentId}`);
-            if (!tile) return;
-            const a = agents.get(agentId);
-            if (!a) return;
-            const pathEl = tile.querySelector(`#compact-spark-${agentId}`);
-            if (pathEl) pathEl.setAttribute('d', sparklinePath(a.heatRing, 60, 18));
-            const lastEl = tile.querySelector(`#compact-lastline-${agentId}`);
-            if (lastEl) lastEl.textContent = a.lastLine || ' ';
+            if (tile) {
+                const a = agents.get(agentId);
+                if (a) {
+                    const pathEl = tile.querySelector(`#compact-spark-${agentId}`);
+                    if (pathEl) pathEl.setAttribute('d', sparklinePath(a.heatRing, 60, 18));
+                    const lastEl = tile.querySelector(`#compact-lastline-${agentId}`);
+                    if (lastEl) lastEl.textContent = a.lastLine || ' ';
+                }
+            }
+            // Pin cells show the same live data when the agent is pinned.
+            if (typeof refreshPinCell === 'function') refreshPinCell(agentId);
         }
 
         // Manual toggle for developer testing before step 4 picks the mode
@@ -543,9 +572,17 @@
             }
         }
 
-        // Global listener: clicking an agent-header dispatches swap-to-focus
+        // Global listeners: clicking a pin button toggles the pin;
+        // clicking an agent-header elsewhere dispatches swap-to-focus
         // (complementing the compact-tile click from step 2).
         document.addEventListener('click', (e) => {
+            const pinBtn = e.target.closest('.btn-pin[data-pin-id]');
+            if (pinBtn) {
+                togglePin(pinBtn.getAttribute('data-pin-id'));
+                e.stopPropagation();
+                return;
+            }
+            if (e.target.closest('[data-no-focus]')) return;
             const hdr = e.target.closest('.agent-header[data-focus-id]');
             if (!hdr) return;
             const id = hdr.getAttribute('data-focus-id');
@@ -553,6 +590,106 @@
             document.dispatchEvent(new CustomEvent('swap-to-focus', {
                 detail: { agentId: id },
             }));
+        });
+
+        // --- Keyboard shortcuts ---
+        //
+        // 1..9  focus Nth hottest (unpinned) agent
+        // 0     focus coordinator if one exists
+        // f     toggle focus panel width (medium ↔ large)
+        // p     pin/unpin the currently focused agent
+        // /     step 6 hook — focuses the filter input when it exists
+        // Esc   clear explicit focus; auto-pick takes over
+        //
+        // Ignores events when the user is typing into an input, textarea,
+        // select, or anything inside an xterm (contenteditable via xterm).
+
+        function isTypingTarget(t) {
+            if (!t) return false;
+            const tag = (t.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+            if (t.isContentEditable) return true;
+            if (t.closest && t.closest('.xterm')) return true;
+            return false;
+        }
+
+        function hottestUnpinned(n) {
+            return buildLayoutItems()
+                .sort((a, b) => b.value - a.value)
+                .slice(0, n);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (isTypingTarget(e.target)) return;
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            const k = e.key;
+
+            if (k >= '1' && k <= '9') {
+                const n = parseInt(k, 10);
+                const hot = hottestUnpinned(n);
+                if (hot.length >= n) {
+                    e.preventDefault();
+                    document.dispatchEvent(new CustomEvent('swap-to-focus', {
+                        detail: { agentId: hot[n - 1].id },
+                    }));
+                }
+                return;
+            }
+            if (k === '0') {
+                const coord = Array.from(agents.entries()).find(([id, a]) => {
+                    if (layoutState.pins.has(id)) return false;
+                    const role = a?.panel?.querySelector?.('.agent-role')?.textContent?.toLowerCase() || '';
+                    return role === 'coordinator';
+                });
+                if (coord) {
+                    e.preventDefault();
+                    document.dispatchEvent(new CustomEvent('swap-to-focus', {
+                        detail: { agentId: coord[0] },
+                    }));
+                }
+                return;
+            }
+            if (k === 'f') {
+                e.preventDefault();
+                layoutState.focusSize = layoutState.focusSize === 'medium' ? 'large' : 'medium';
+                saveLayoutPrefs();
+                const dashboard = document.getElementById('dashboard');
+                if (dashboard && layoutState.enabled) {
+                    applyLayout(computeLayout(dashboard));
+                }
+                return;
+            }
+            if (k === 'p') {
+                if (layoutState.focusId) {
+                    e.preventDefault();
+                    togglePin(layoutState.focusId);
+                }
+                return;
+            }
+            if (k === '/') {
+                // Step 6 will wire a real filter input. For now, focus
+                // whatever `#filter-input` exists or just log.
+                const input = document.getElementById('filter-input');
+                if (input) {
+                    e.preventDefault();
+                    input.focus();
+                } else {
+                    console.log('filter input not yet available (step 6)');
+                }
+                return;
+            }
+            if (k === 'Escape') {
+                if (layoutState.focusId !== null) {
+                    e.preventDefault();
+                    layoutState.focusId = null;
+                    saveLayoutPrefs();
+                    const dashboard = document.getElementById('dashboard');
+                    if (dashboard && layoutState.enabled) {
+                        applyLayout(computeLayout(dashboard));
+                    }
+                }
+                return;
+            }
         });
 
         // swap-to-focus: promote the clicked tile to the focus panel.
@@ -563,6 +700,7 @@
             if (!id || !agents.has(id)) return;
             layoutState.focusId = id;
             layoutState.freezeUntil = Date.now() + LAYOUT_FREEZE_MS;
+            saveLayoutPrefs();
             const dashboard = document.getElementById('dashboard');
             if (dashboard && layoutState.enabled) {
                 applyLayout(computeLayout(dashboard));
@@ -878,8 +1016,12 @@
         const HEAT_SMOOTH_ALPHA = 0.3; // ~5s half-life at 1 Hz polling
         const LAYOUT_REFRESH_MS = 1500;
         const LAYOUT_FREEZE_MS = 5000;
-        const FOCUS_MIN_WIDTH_FRAC = 0.4;
-        const FOCUS_MAX_WIDTH_FRAC = 0.55;
+
+        // Focus-panel width fractions keyed by layoutState.focusSize:
+        // [minFrac, maxFrac] of the total viewport width.
+        const FOCUS_WIDTHS = { medium: [0.4, 0.5], large: [0.55, 0.7] };
+        const PINS_MAX = 6;
+        const LAYOUT_PREFS_KEY = 'atn-scale-ui-v1';
 
         const layoutState = {
             focusId: null,
@@ -887,7 +1029,125 @@
             // per-agent EWMA of raw heat from /api/agents/heat
             smoothed: new Map(),
             enabled: false,
+            pins: new Set(),
+            focusSize: 'medium', // 'medium' | 'large'
         };
+
+        function saveLayoutPrefs() {
+            try {
+                const data = JSON.stringify({
+                    pins: Array.from(layoutState.pins),
+                    focusId: layoutState.focusId,
+                    focusSize: layoutState.focusSize,
+                });
+                localStorage.setItem(LAYOUT_PREFS_KEY, data);
+            } catch (_) { /* localStorage unavailable or full — ignore */ }
+        }
+
+        function loadLayoutPrefs() {
+            try {
+                const raw = localStorage.getItem(LAYOUT_PREFS_KEY);
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                if (Array.isArray(data.pins)) layoutState.pins = new Set(data.pins);
+                if (typeof data.focusId === 'string') layoutState.focusId = data.focusId;
+                if (data.focusSize === 'medium' || data.focusSize === 'large') {
+                    layoutState.focusSize = data.focusSize;
+                }
+            } catch (_) { /* malformed prefs — drop */ }
+        }
+
+        function syncPinButtons() {
+            document.querySelectorAll('.btn-pin[data-pin-id]').forEach((btn) => {
+                const id = btn.getAttribute('data-pin-id');
+                btn.classList.toggle('pinned', layoutState.pins.has(id));
+                btn.title = layoutState.pins.has(id) ? 'Unpin' : 'Pin to always-visible row';
+            });
+        }
+
+        function togglePin(agentId) {
+            if (layoutState.pins.has(agentId)) {
+                layoutState.pins.delete(agentId);
+            } else {
+                if (layoutState.pins.size >= PINS_MAX) {
+                    console.warn(`pin limit reached (${PINS_MAX}); unpin something first`);
+                    return;
+                }
+                layoutState.pins.add(agentId);
+                // Pinning the current focus gives focus back to auto-pick.
+                if (layoutState.focusId === agentId) {
+                    layoutState.focusId = null;
+                }
+            }
+            saveLayoutPrefs();
+            renderPinRow();
+            syncPinButtons();
+            const dashboard = document.getElementById('dashboard');
+            if (dashboard && layoutState.enabled) {
+                applyLayout(computeLayout(dashboard));
+            }
+        }
+
+        function renderPinRow() {
+            const row = document.getElementById('pin-row');
+            if (!row) return;
+            row.innerHTML = '';
+            const anyPins = layoutState.pins.size > 0;
+            row.classList.toggle('visible', anyPins);
+            for (const id of layoutState.pins) {
+                if (!agents.has(id)) continue;
+                const cell = document.createElement('div');
+                cell.className = 'pin-cell';
+                cell.dataset.agentId = id;
+                const a = agents.get(id);
+                const name = a?.panel?.querySelector?.('.agent-name')?.textContent || id;
+                const role = a?.panel?.querySelector?.('.agent-role')?.textContent || 'agent';
+                const stateLabelTxt = a?.panel?.querySelector?.('.state-badge')?.textContent || 'Idle';
+                const stateCls = a?.panel?.querySelector?.('.state-badge')?.className || 'state-badge state-idle';
+                cell.innerHTML = `
+                    <button class="pin-unpin" title="Unpin" data-unpin-id="${id}">×</button>
+                    <div class="pin-head">
+                        <span class="pin-icon">📌</span>
+                        <span class="pin-name" title="${name}">${name}</span>
+                        <span class="${stateCls} pin-state">${stateLabelTxt}</span>
+                    </div>
+                    <div class="pin-body">
+                        <svg class="sparkline" viewBox="0 0 44 14" preserveAspectRatio="none">
+                            <path d="" id="pin-spark-${id}"></path>
+                        </svg>
+                        <span class="pin-lastline" id="pin-lastline-${id}">&nbsp;</span>
+                    </div>
+                `;
+                cell.addEventListener('click', (e) => {
+                    // Clicking the × unpins; clicking elsewhere focuses.
+                    if (e.target.closest('[data-unpin-id]')) {
+                        togglePin(id);
+                        e.stopPropagation();
+                        return;
+                    }
+                    document.dispatchEvent(new CustomEvent('swap-to-focus', {
+                        detail: { agentId: id },
+                    }));
+                });
+                row.appendChild(cell);
+                // Seed sparkline + last-line from current state.
+                const path = cell.querySelector(`#pin-spark-${id}`);
+                if (path) path.setAttribute('d', sparklinePath(a.heatRing, 44, 14));
+                const ll = cell.querySelector(`#pin-lastline-${id}`);
+                if (ll) ll.textContent = a.lastLine || ' ';
+            }
+        }
+
+        function refreshPinCell(agentId) {
+            const cell = document.querySelector(`.pin-cell[data-agent-id="${agentId}"]`);
+            if (!cell) return;
+            const a = agents.get(agentId);
+            if (!a) return;
+            const path = cell.querySelector(`#pin-spark-${agentId}`);
+            if (path) path.setAttribute('d', sparklinePath(a.heatRing, 44, 14));
+            const ll = cell.querySelector(`#pin-lastline-${agentId}`);
+            if (ll) ll.textContent = a.lastLine || ' ';
+        }
 
         function updateSmoothedHeat(agentId, rawHeat) {
             const prev = layoutState.smoothed.get(agentId) ?? rawHeat;
@@ -915,8 +1175,10 @@
 
         function buildLayoutItems() {
             // Floor so a zero-heat agent still has a visible tile area.
+            // Pinned agents live in the pin row and are excluded from the
+            // heat-sized treemap.
             const FLOOR = 0.02;
-            const ids = Array.from(agents.keys());
+            const ids = Array.from(agents.keys()).filter((id) => !layoutState.pins.has(id));
             return ids.map((id) => ({
                 id,
                 value: Math.max(FLOOR, layoutState.smoothed.get(id) ?? FLOOR),
@@ -953,11 +1215,14 @@
             }
 
             // Focus panel gets the left slice. Width scales with relative
-            // heat but clamps to [FOCUS_MIN_WIDTH_FRAC, FOCUS_MAX_WIDTH_FRAC].
+            // heat but clamps to the [min, max] range for the current
+            // focusSize ('medium' = narrower, 'large' = wider).
             const total = items.reduce((a, b) => a + b.value, 0);
+            const [minFrac, maxFrac] = FOCUS_WIDTHS[layoutState.focusSize]
+                || FOCUS_WIDTHS.medium;
             const focusFrac = Math.min(
-                FOCUS_MAX_WIDTH_FRAC,
-                Math.max(FOCUS_MIN_WIDTH_FRAC, focusItem.value / total + 0.3),
+                maxFrac,
+                Math.max(minFrac, focusItem.value / total + 0.3),
             );
             const focusW = Math.floor(rect.w * focusFrac) - 4;
             const focusRect = { x: rect.x, y: rect.y, w: focusW, h: rect.h };
@@ -1070,6 +1335,9 @@
                     <span class="agent-role">${agent.role}</span>
                     <span id="saga-badge-${agent.id}" style="font-size:11px;color:#a78bfa;"></span>
                     <span class="spacer"></span>
+                    <span class="tile-actions" data-no-focus="1">
+                        <button class="btn-pin" data-pin-id="${agent.id}" title="Pin to always-visible row">📌</button>
+                    </span>
                     <span class="conn-dot disconnected" id="conn-${agent.id}"></span>
                     <span class="state-badge state-${sk}" id="badge-${agent.id}">${stateLabel(agent.state)}</span>
                 </div>
@@ -1438,6 +1706,12 @@
             // Start heat polling; feeds smoothedHeat for the treemap.
             startHeatPolling();
 
+            // Hydrate user prefs (pins + focus + focus size) before the
+            // first layout so they're honored on the very first render.
+            loadLayoutPrefs();
+            renderPinRow();
+            syncPinButtons();
+
             // Flip the dashboard into treemap mode whenever at least one
             // agent is present (empty-state stays as the CTA card).
             if (agentList.length > 0) {
@@ -1456,6 +1730,8 @@
             window.layoutState = layoutState;
             window.squarify = squarify;
             window.enableTreemapMode = enableTreemapMode;
+            window.togglePin = togglePin;
+            window.saveLayoutPrefs = saveLayoutPrefs;
         }
 
         init();
