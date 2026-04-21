@@ -50,6 +50,23 @@
         .conn-dot.connected { background: #4ecca3; }
         .conn-dot.disconnected { background: #e94560; }
 
+        /* Compact tile — replaces an xterm panel when allotted space is
+           too small for xterm to be readable. No xterm DOM inside; cheap
+           to render many of these at once. */
+        .agent-compact { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; overflow: hidden; cursor: pointer; min-height: 54px; padding: 6px 8px; gap: 4px; }
+        .agent-compact:hover { border-color: #4ecca3; }
+        .agent-compact .compact-head { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+        .agent-compact .compact-name { font-weight: 600; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .agent-compact .compact-role { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.4px; flex-shrink: 0; }
+        .agent-compact .compact-spacer { flex: 1; }
+        .agent-compact .state-badge { font-size: 10px; padding: 1px 6px; }
+        .agent-compact .compact-body { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .agent-compact .sparkline { flex-shrink: 0; width: 60px; height: 18px; }
+        .agent-compact .sparkline path { fill: none; stroke: #4ecca3; stroke-width: 1.5; }
+        .agent-compact .last-line { flex: 1; min-width: 0; font-family: monospace; font-size: 10px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .agent-compact .focus-hint { font-size: 9px; color: #4ecca3; flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
+        .agent-compact:hover .focus-hint { opacity: 1; }
+
         /* View tabs */
         .view-tabs { display: flex; gap: 4px; margin-left: auto; }
         .view-tab { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
@@ -355,7 +372,162 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script>
         const API_BASE = '';
-        const agents = new Map(); // id -> { term, fitAddon, evtSource, panel }
+        const agents = new Map(); // id -> { term, fitAddon, evtSource, panel, heatRing, lastLine, mode }
+
+        // --- Compact-tile state ---
+        //
+        // Each agent records:
+        //   heatRing: rolling bytes_per_sec samples (most recent last, 60-long)
+        //   lastLine: most recent fully-terminated line of PTY output (<=200 chars)
+        //   mode:     'xterm' | 'compact' — step 4 will pick this by tile size.
+        //
+        // The compact tile reads both; it does NOT embed an xterm.
+
+        const HEAT_RING_LEN = 60;
+
+        function ensureAgentMeta(id) {
+            const a = agents.get(id);
+            if (!a) return null;
+            if (!a.heatRing) a.heatRing = new Array(HEAT_RING_LEN).fill(0);
+            if (!a.lastLine) a.lastLine = '';
+            if (!a.mode) a.mode = 'xterm';
+            return a;
+        }
+
+        function recordOutputBytes(id, bytes) {
+            const a = ensureAgentMeta(id);
+            if (!a) return;
+            // Append a plain-text-ish suffix to the last-line buffer, strip
+            // common ANSI control-sequence envelopes so the preview is
+            // readable. Keep ≤200 chars.
+            let txt = '';
+            for (let i = 0; i < bytes.length; i++) {
+                const c = bytes[i];
+                if (c === 0x0a) txt += '\n';
+                else if (c === 0x0d) {} // ignore CR alone
+                else if (c === 0x1b) {
+                    // Skip CSI: ESC [ params letter
+                    i++;
+                    if (bytes[i] === 0x5b /* '[' */) {
+                        while (i < bytes.length && bytes[i] < 0x40) i++;
+                    }
+                    // else: skip just the escape byte
+                } else if (c >= 0x20 && c < 0x7f) {
+                    txt += String.fromCharCode(c);
+                }
+            }
+            const buf = (a.lastLine + txt).slice(-400);
+            const lines = buf.split('\n').filter(l => l.trim().length > 0);
+            a.lastLine = (lines.length ? lines[lines.length - 1] : buf).slice(-200);
+        }
+
+        async function pollHeat() {
+            try {
+                const res = await fetch(`${API_BASE}/api/agents/heat`);
+                if (!res.ok) return;
+                const list = await res.json();
+                for (const h of list) {
+                    const a = ensureAgentMeta(h.id);
+                    if (!a) continue;
+                    a.heatRing.push(h.bytes_per_sec);
+                    a.heatRing.shift();
+                    a.currentHeat = h.heat;
+                    a.currentBps = h.bytes_per_sec;
+                    refreshCompactIfPresent(h.id);
+                }
+            } catch (_) { /* transient network; next tick retries */ }
+        }
+
+        function startHeatPolling() {
+            pollHeat();
+            setInterval(pollHeat, 1000);
+        }
+
+        function sparklinePath(ring, w, h) {
+            if (!ring || ring.length === 0) return '';
+            const max = Math.max(1, ...ring);
+            const dx = w / Math.max(1, ring.length - 1);
+            let d = '';
+            for (let i = 0; i < ring.length; i++) {
+                const x = (i * dx).toFixed(1);
+                const y = (h - (ring[i] / max) * h).toFixed(1);
+                d += (i === 0 ? 'M' : 'L') + x + ',' + y + ' ';
+            }
+            return d.trim();
+        }
+
+        function createCompactTile(agent) {
+            const tile = document.createElement('div');
+            tile.className = 'agent-compact';
+            tile.id = `compact-${agent.id}`;
+            tile.dataset.agentId = agent.id;
+            const sk = stateKey(agent.state);
+            tile.innerHTML = `
+                <div class="compact-head">
+                    <span class="compact-name">${agent.name}</span>
+                    <span class="compact-role">${agent.role}</span>
+                    <span class="compact-spacer"></span>
+                    <span class="state-badge state-${sk}" id="compact-badge-${agent.id}">${stateLabel(agent.state)}</span>
+                </div>
+                <div class="compact-body">
+                    <svg class="sparkline" viewBox="0 0 60 18" preserveAspectRatio="none">
+                        <path d="" id="compact-spark-${agent.id}"></path>
+                    </svg>
+                    <span class="last-line" id="compact-lastline-${agent.id}">&nbsp;</span>
+                    <span class="focus-hint">click to focus ▸</span>
+                </div>
+            `;
+            tile.addEventListener('click', () => {
+                const evt = new CustomEvent('swap-to-focus', {
+                    detail: { agentId: agent.id },
+                    bubbles: true,
+                });
+                tile.dispatchEvent(evt);
+            });
+            return tile;
+        }
+
+        function refreshCompactIfPresent(agentId) {
+            const tile = document.getElementById(`compact-${agentId}`);
+            if (!tile) return;
+            const a = agents.get(agentId);
+            if (!a) return;
+            const pathEl = tile.querySelector(`#compact-spark-${agentId}`);
+            if (pathEl) pathEl.setAttribute('d', sparklinePath(a.heatRing, 60, 18));
+            const lastEl = tile.querySelector(`#compact-lastline-${agentId}`);
+            if (lastEl) lastEl.textContent = a.lastLine || ' ';
+        }
+
+        // Manual toggle for developer testing before step 4 picks the mode
+        // by tile size. Swaps a full panel in/out for its compact tile.
+        function toggleCompactMode(agentId) {
+            const a = agents.get(agentId);
+            if (!a) return;
+            const current = document.getElementById(`panel-${agentId}`)
+                || document.getElementById(`compact-${agentId}`);
+            if (!current) return;
+            const dashboard = document.getElementById('dashboard');
+            if (a.mode === 'xterm') {
+                const compact = createCompactTile({
+                    id: agentId,
+                    name: a.panel?.querySelector('.agent-name')?.textContent || agentId,
+                    role: a.panel?.querySelector('.agent-role')?.textContent || 'agent',
+                    state: { state: 'idle' },
+                });
+                dashboard.replaceChild(compact, current);
+                a.mode = 'compact';
+                refreshCompactIfPresent(agentId);
+            } else {
+                if (a.panel) dashboard.replaceChild(a.panel, current);
+                a.mode = 'xterm';
+            }
+        }
+
+        // Default handler for swap-to-focus events. Step 4 will override
+        // this with real layout logic; for now just log.
+        document.addEventListener('swap-to-focus', (e) => {
+            console.log('swap-to-focus', e.detail);
+        });
 
         const STATE_LABELS = {
             starting: 'Starting',
@@ -473,16 +645,19 @@
             const agent = agents.get(agentId);
 
             evtSource.onopen = () => {
-                connDot.className = 'conn-dot connected';
+                if (connDot) connDot.className = 'conn-dot connected';
             };
 
             evtSource.onmessage = (event) => {
                 const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
-                agent.term.write(bytes);
+                if (agent && agent.term) agent.term.write(bytes);
+                // Also feed the compact-tile renderer's last-line buffer.
+                recordOutputBytes(agentId, bytes);
+                refreshCompactIfPresent(agentId);
             };
 
             evtSource.onerror = () => {
-                connDot.className = 'conn-dot disconnected';
+                if (connDot) connDot.className = 'conn-dot disconnected';
                 evtSource.close();
                 setTimeout(() => connectSSE(agentId), 2000);
             };
@@ -735,6 +910,14 @@
 
             // Poll states
             setInterval(pollStates, 2000);
+
+            // Start heat polling for the scale-UI treemap + compact tiles.
+            startHeatPolling();
+
+            // Expose the compact-tile dev toggle on window so it can be
+            // driven from devtools: `toggleCompactMode('worker-hlasm')`.
+            // Step 4 will replace this with size-driven auto-selection.
+            window.toggleCompactMode = toggleCompactMode;
         }
 
         init();
