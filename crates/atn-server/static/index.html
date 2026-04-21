@@ -18,6 +18,18 @@
         .dashboard.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
         .dashboard.cols-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
+        /* Treemap mode: dashboard becomes an absolutely-positioned canvas.
+           Tiles get their inset from computeLayout(). Smooth transitions
+           keep the layout from feeling jittery at the 1.5s refresh cadence. */
+        .dashboard.treemap-mode { display: block; position: relative; overflow: hidden; padding: 4px; gap: 0; }
+        .dashboard.treemap-mode .agent-panel,
+        .dashboard.treemap-mode .agent-compact {
+            position: absolute;
+            transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease;
+            min-height: 0;
+        }
+        .dashboard.treemap-mode .agent-panel.focus { outline: 2px solid #e94560; outline-offset: -2px; }
+
         .agent-panel { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; min-height: 300px; overflow: auto; }
         .agent-header { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
         .agent-header .agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; }
@@ -438,6 +450,9 @@
                     a.heatRing.shift();
                     a.currentHeat = h.heat;
                     a.currentBps = h.bytes_per_sec;
+                    // Feed the layout's smoothed-heat EWMA so treemap tile
+                    // sizes don't jitter on tiny byte bursts.
+                    updateSmoothedHeat(h.id, h.heat);
                     refreshCompactIfPresent(h.id);
                 }
             } catch (_) { /* transient network; next tick retries */ }
@@ -528,10 +543,33 @@
             }
         }
 
-        // Default handler for swap-to-focus events. Step 4 will override
-        // this with real layout logic; for now just log.
+        // Global listener: clicking an agent-header dispatches swap-to-focus
+        // (complementing the compact-tile click from step 2).
+        document.addEventListener('click', (e) => {
+            const hdr = e.target.closest('.agent-header[data-focus-id]');
+            if (!hdr) return;
+            const id = hdr.getAttribute('data-focus-id');
+            if (!id) return;
+            document.dispatchEvent(new CustomEvent('swap-to-focus', {
+                detail: { agentId: id },
+            }));
+        });
+
+        // swap-to-focus: promote the clicked tile to the focus panel.
+        // Freezes layout refreshes for a moment so the user's click
+        // isn't immediately overwritten by the heat poll's re-layout.
         document.addEventListener('swap-to-focus', (e) => {
-            console.log('swap-to-focus', e.detail);
+            const id = e.detail && e.detail.agentId;
+            if (!id || !agents.has(id)) return;
+            layoutState.focusId = id;
+            layoutState.freezeUntil = Date.now() + LAYOUT_FREEZE_MS;
+            const dashboard = document.getElementById('dashboard');
+            if (dashboard && layoutState.enabled) {
+                applyLayout(computeLayout(dashboard));
+            }
+            // setFocus handles the PTY-resize + xterm fit so the focused
+            // tile is crisp at its new geometry.
+            setFocus(id);
         });
 
         // --- CSS-scaled xterm layout ---
@@ -673,6 +711,324 @@
             }
         })();
 
+        // --- Treemap layout ---
+        //
+        // Classic squarified treemap (Bruls / Huijsen / van Wijk 2000).
+        // Input: a free rect + a list of positive values pre-sorted
+        // descending. Output: per-item {x, y, w, h}. The algorithm greedily
+        // lays out a "row" along the shorter axis, adding items while aspect
+        // ratio improves, then recurses on the remaining rect.
+        //
+        // We feed it a list derived from each agent's smoothed heat score
+        // every ~1.5 s. Focus agent is carved out first and gets its own
+        // large rect (40–55% of viewport width).
+
+        function worstRatio(rowValues, sumRow, shortSide) {
+            // Aspect ratio of the worst (largest-ratio) tile in `rowValues`
+            // if packed across `shortSide`. Smaller is squarer (1 = ideal).
+            let rmin = Infinity, rmax = -Infinity;
+            for (const v of rowValues) {
+                if (v < rmin) rmin = v;
+                if (v > rmax) rmax = v;
+            }
+            const s2 = shortSide * shortSide;
+            const sum2 = sumRow * sumRow;
+            return Math.max((s2 * rmax) / sum2, sum2 / (s2 * rmin));
+        }
+
+        function layoutRow(row, rect) {
+            // Rows are always placed along the shorter axis of `rect`:
+            // short-axis = h → row is a vertical strip on the left.
+            // short-axis = w → row is a horizontal strip on top.
+            // Returns { placed: [{id, x, y, w, h}], remaining: rect }.
+            const sum = row.reduce((a, b) => a + b.value, 0);
+            const out = [];
+            if (rect.h <= rect.w) {
+                const w = sum / rect.h;
+                let y = rect.y;
+                for (const it of row) {
+                    const h = it.value / w;
+                    out.push({ id: it.id, x: rect.x, y, w, h });
+                    y += h;
+                }
+                return {
+                    placed: out,
+                    remaining: { x: rect.x + w, y: rect.y, w: rect.w - w, h: rect.h },
+                };
+            } else {
+                const h = sum / rect.w;
+                let x = rect.x;
+                for (const it of row) {
+                    const w = it.value / h;
+                    out.push({ id: it.id, x, y: rect.y, w, h });
+                    x += w;
+                }
+                return {
+                    placed: out,
+                    remaining: { x: rect.x, y: rect.y + h, w: rect.w, h: rect.h - h },
+                };
+            }
+        }
+
+        /**
+         * Squarified treemap.
+         *
+         * @param rect  { x, y, w, h } — pixel rect to fill
+         * @param items [{ id, value }] — value > 0; order doesn't matter,
+         *              the algorithm sorts descending internally
+         * @returns [{ id, x, y, w, h }]
+         */
+        function squarify(rect, items) {
+            if (!items || items.length === 0 || rect.w <= 0 || rect.h <= 0) return [];
+            const sorted = items.slice().sort((a, b) => b.value - a.value);
+            const total = sorted.reduce((a, b) => a + b.value, 0);
+            if (total <= 0) return [];
+            const area = rect.w * rect.h;
+            const scale = area / total;
+            // Pool carries id + area-normalized value together.
+            const pool = sorted.map((it) => ({ id: it.id, value: it.value * scale }));
+
+            const placed = [];
+            let remaining = { ...rect };
+
+            while (pool.length > 0) {
+                const short = Math.min(remaining.w, remaining.h);
+                const row = [];
+                let rowSum = 0;
+                let rowWorst = Infinity;
+
+                while (pool.length > 0) {
+                    const candidate = pool[0];
+                    const nextSum = rowSum + candidate.value;
+                    const trial = row.map((r) => r.value).concat([candidate.value]);
+                    const trialWorst = worstRatio(trial, nextSum, short);
+                    if (row.length === 0 || trialWorst <= rowWorst) {
+                        row.push(candidate);
+                        rowSum = nextSum;
+                        rowWorst = trialWorst;
+                        pool.shift();
+                    } else {
+                        break;
+                    }
+                }
+
+                const { placed: rects, remaining: rem } = layoutRow(row, remaining);
+                for (const r of rects) placed.push(r);
+                remaining = rem;
+                if (remaining.w <= 0.5 || remaining.h <= 0.5) break;
+            }
+
+            return placed;
+        }
+
+        // Self-test for squarify: sum of areas ≈ rect area; every tile
+        // lies inside the rect; single-item and two-item cases are exact.
+        (function testSquarify() {
+            const rect = { x: 0, y: 0, w: 600, h: 400 };
+            const items = [
+                { id: 'a', value: 6 },
+                { id: 'b', value: 6 },
+                { id: 'c', value: 4 },
+                { id: 'd', value: 3 },
+                { id: 'e', value: 2 },
+                { id: 'f', value: 2 },
+                { id: 'g', value: 1 },
+            ];
+            const out = squarify(rect, items);
+            let fails = 0;
+            if (out.length !== items.length) {
+                console.error(`squarify FAIL: expected ${items.length} tiles, got ${out.length}`);
+                fails++;
+            }
+            const totalArea = rect.w * rect.h;
+            let laidArea = 0;
+            for (const t of out) {
+                laidArea += t.w * t.h;
+                if (t.x < rect.x - 0.01 || t.y < rect.y - 0.01
+                    || t.x + t.w > rect.x + rect.w + 0.01
+                    || t.y + t.h > rect.y + rect.h + 0.01) {
+                    console.error(`squarify FAIL: tile ${t.id} out of bounds`, t);
+                    fails++;
+                }
+            }
+            if (Math.abs(laidArea - totalArea) > 1) {
+                console.error(`squarify FAIL: area mismatch — laid ${laidArea} vs rect ${totalArea}`);
+                fails++;
+            }
+            const single = squarify(rect, [{ id: 'only', value: 1 }]);
+            if (single.length !== 1
+                || Math.abs(single[0].w - rect.w) > 0.01
+                || Math.abs(single[0].h - rect.h) > 0.01) {
+                console.error('squarify FAIL: single-item should fill the rect', single);
+                fails++;
+            }
+            if (squarify(rect, []).length !== 0) {
+                console.error('squarify FAIL: empty items should return []');
+                fails++;
+            }
+            if (fails === 0) {
+                console.log('squarify: %d checks PASS', items.length + 3);
+            } else {
+                console.error(`squarify: ${fails} FAIL`);
+            }
+        })();
+
+        // --- Layout state ---
+
+        const HEAT_SMOOTH_ALPHA = 0.3; // ~5s half-life at 1 Hz polling
+        const LAYOUT_REFRESH_MS = 1500;
+        const LAYOUT_FREEZE_MS = 5000;
+        const FOCUS_MIN_WIDTH_FRAC = 0.4;
+        const FOCUS_MAX_WIDTH_FRAC = 0.55;
+
+        const layoutState = {
+            focusId: null,
+            freezeUntil: 0,
+            // per-agent EWMA of raw heat from /api/agents/heat
+            smoothed: new Map(),
+            enabled: false,
+        };
+
+        function updateSmoothedHeat(agentId, rawHeat) {
+            const prev = layoutState.smoothed.get(agentId) ?? rawHeat;
+            const next = prev * (1 - HEAT_SMOOTH_ALPHA) + rawHeat * HEAT_SMOOTH_ALPHA;
+            layoutState.smoothed.set(agentId, next);
+            return next;
+        }
+
+        function autoPickFocus(items) {
+            if (items.length === 0) return null;
+            // Prefer the highest-heat coordinator if there is one.
+            let bestCoord = null, bestCoordV = -1;
+            let bestAny = items[0];
+            for (const it of items) {
+                if (it.value > bestAny.value) bestAny = it;
+                const a = agents.get(it.id);
+                const role = a?.role || (a?.panel?.querySelector?.('.agent-role')?.textContent) || '';
+                if (role.toLowerCase() === 'coordinator' && it.value > bestCoordV) {
+                    bestCoord = it;
+                    bestCoordV = it.value;
+                }
+            }
+            return (bestCoord || bestAny).id;
+        }
+
+        function buildLayoutItems() {
+            // Floor so a zero-heat agent still has a visible tile area.
+            const FLOOR = 0.02;
+            const ids = Array.from(agents.keys());
+            return ids.map((id) => ({
+                id,
+                value: Math.max(FLOOR, layoutState.smoothed.get(id) ?? FLOOR),
+            }));
+        }
+
+        function computeLayout(container) {
+            const items = buildLayoutItems();
+            if (items.length === 0) return { focus: null, tiles: [] };
+            if (layoutState.focusId && !agents.has(layoutState.focusId)) {
+                layoutState.focusId = null;
+            }
+            if (!layoutState.focusId) {
+                layoutState.focusId = autoPickFocus(items);
+            }
+
+            const rect = {
+                x: 4,
+                y: 4,
+                w: Math.max(200, container.clientWidth - 8),
+                h: Math.max(200, container.clientHeight - 8),
+            };
+
+            const focusId = layoutState.focusId;
+            const focusItem = items.find((it) => it.id === focusId);
+            const rest = items.filter((it) => it.id !== focusId);
+
+            if (!focusItem) {
+                return { focus: null, tiles: squarify(rect, items) };
+            }
+
+            if (rest.length === 0) {
+                return { focus: { id: focusId, ...rect }, tiles: [] };
+            }
+
+            // Focus panel gets the left slice. Width scales with relative
+            // heat but clamps to [FOCUS_MIN_WIDTH_FRAC, FOCUS_MAX_WIDTH_FRAC].
+            const total = items.reduce((a, b) => a + b.value, 0);
+            const focusFrac = Math.min(
+                FOCUS_MAX_WIDTH_FRAC,
+                Math.max(FOCUS_MIN_WIDTH_FRAC, focusItem.value / total + 0.3),
+            );
+            const focusW = Math.floor(rect.w * focusFrac) - 4;
+            const focusRect = { x: rect.x, y: rect.y, w: focusW, h: rect.h };
+            const restRect = {
+                x: rect.x + focusW + 4,
+                y: rect.y,
+                w: rect.w - focusW - 4,
+                h: rect.h,
+            };
+
+            const tiles = squarify(restRect, rest);
+            return { focus: { id: focusId, ...focusRect }, tiles };
+        }
+
+        function ensureModeFor(id, rect) {
+            // Pick xterm vs compact based on the rect fit, using the step-3
+            // scale picker. Switches the tile mode if needed.
+            const a = agents.get(id);
+            if (!a) return;
+            const { w: natW, h: natH } = nativeTermSize(id);
+            const k = pickTermScale(rect.w - 16, rect.h - 40, natW, natH);
+            const wantCompact = k === null;
+            if (wantCompact && a.mode !== 'compact') toggleCompactMode(id);
+            if (!wantCompact && a.mode !== 'xterm') toggleCompactMode(id);
+        }
+
+        function applyLayout(layout) {
+            const dashboard = document.getElementById('dashboard');
+            if (!dashboard) return;
+            // Collect all mounted tile elements by agent id.
+            const place = (id, rect, isFocus) => {
+                const el = document.getElementById(`panel-${id}`)
+                    || document.getElementById(`compact-${id}`);
+                if (!el) return;
+                el.style.left = `${rect.x}px`;
+                el.style.top = `${rect.y}px`;
+                el.style.width = `${rect.w}px`;
+                el.style.height = `${rect.h}px`;
+                if (el.classList.contains('agent-panel')) {
+                    el.classList.toggle('focus', !!isFocus);
+                }
+            };
+            if (layout.focus) {
+                ensureModeFor(layout.focus.id, layout.focus);
+                place(layout.focus.id, layout.focus, true);
+            }
+            for (const t of layout.tiles) {
+                ensureModeFor(t.id, t);
+                place(t.id, t, false);
+            }
+            // After positions change, update per-xterm scales.
+            updateTileScales();
+        }
+
+        function treemapRefreshTick() {
+            if (!layoutState.enabled) return;
+            if (Date.now() < layoutState.freezeUntil) return;
+            const dashboard = document.getElementById('dashboard');
+            if (!dashboard) return;
+            applyLayout(computeLayout(dashboard));
+        }
+
+        function enableTreemapMode() {
+            const dashboard = document.getElementById('dashboard');
+            if (!dashboard) return;
+            dashboard.classList.add('treemap-mode');
+            dashboard.classList.remove('cols-1', 'cols-2', 'cols-3', 'cols-4');
+            layoutState.enabled = true;
+            applyLayout(computeLayout(dashboard));
+        }
+
         const STATE_LABELS = {
             starting: 'Starting',
             running: 'Running',
@@ -709,7 +1065,7 @@
                 : `${agent.name}`;
 
             panel.innerHTML = `
-                <div class="agent-header">
+                <div class="agent-header" data-focus-id="${agent.id}" style="cursor: pointer;" title="Click to focus">
                     <span class="agent-name" title="${launchTip}">${agent.name}</span>
                     <span class="agent-role">${agent.role}</span>
                     <span id="saga-badge-${agent.id}" style="font-size:11px;color:#a78bfa;"></span>
@@ -1063,29 +1419,43 @@
             // Fetch per-agent saga step for badges
             pollAgentSagas(agentList.map(a => a.id));
 
-            // Handle resize. xterm stays at its fixed native geometry
-            // (cols x rows set in initTerminal); updateTileScales adjusts
-            // the CSS `--term-k` per tile so the visible size tracks the
-            // allotted space. PTY-side resize is now strictly tied to
-            // setFocus; layout churn never reaches the PTY.
-            window.addEventListener('resize', updateTileScales);
-            new ResizeObserver(updateTileScales).observe(dashboard);
-            // Run once now so newly-spawned panels get their initial scale.
-            setTimeout(updateTileScales, 0);
+            // Resize handling. xterm stays at fixed native geometry; the
+            // treemap recomputes on window resize and per-tick, and
+            // updateTileScales follows up to pick scale snap points.
+            const onResize = () => {
+                if (layoutState.enabled) {
+                    const db = document.getElementById('dashboard');
+                    if (db) applyLayout(computeLayout(db));
+                }
+                updateTileScales();
+            };
+            window.addEventListener('resize', onResize);
+            new ResizeObserver(onResize).observe(dashboard);
 
             // Poll states
             setInterval(pollStates, 2000);
 
-            // Start heat polling for the scale-UI treemap + compact tiles.
+            // Start heat polling; feeds smoothedHeat for the treemap.
             startHeatPolling();
 
-            // Expose dev toggles on window so they can be driven from
-            // devtools before steps 4/5 wire them up for real. Step 4
-            // will replace these with size-driven auto-selection and the
-            // treemap's click-to-focus flow.
+            // Flip the dashboard into treemap mode whenever at least one
+            // agent is present (empty-state stays as the CTA card).
+            if (agentList.length > 0) {
+                enableTreemapMode();
+            }
+
+            // Per-tick re-layout. Suspended while the freeze timer is
+            // running after a swap-to-focus so the user's click isn't
+            // immediately overwritten.
+            setInterval(treemapRefreshTick, LAYOUT_REFRESH_MS);
+
+            // Expose dev toggles on window for devtools poking.
             window.toggleCompactMode = toggleCompactMode;
             window.setFocus = setFocus;
             window.pickTermScale = pickTermScale;
+            window.layoutState = layoutState;
+            window.squarify = squarify;
+            window.enableTreemapMode = enableTreemapMode;
         }
 
         init();
@@ -1225,6 +1595,13 @@
             connectSSE(agent.id);
             setupControls(agent.id);
             refreshDashboardLayout();
+            // If this is the first agent, flip to treemap mode. Otherwise
+            // the running refresh tick will place the new tile within 1.5s.
+            if (!layoutState.enabled) {
+                enableTreemapMode();
+            } else {
+                applyLayout(computeLayout(dashboard));
+            }
         }
 
         function refreshDashboardLayout() {
