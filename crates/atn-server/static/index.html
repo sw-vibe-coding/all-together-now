@@ -1721,23 +1721,7 @@
                     <button class="btn-edit-cfg" data-agent="${agent.id}">Config</button>
                     <button class="btn-delete" data-agent="${agent.id}">Delete</button>
                 </div>
-                <div class="agent-config-editor" id="cfg-${agent.id}">
-                    <label>Name <input id="cfg-name-${agent.id}" value="${agent.name}"></label>
-                    <label>Repo Path <input id="cfg-path-${agent.id}" placeholder="/path/to/repo"></label>
-                    <label>Role
-                        <select id="cfg-role-${agent.id}">
-                            <option value="developer" ${agent.role === 'developer' ? 'selected' : ''}>Developer</option>
-                            <option value="qa" ${agent.role === 'qa' ? 'selected' : ''}>QA</option>
-                            <option value="pm" ${agent.role === 'pm' ? 'selected' : ''}>PM</option>
-                            <option value="coordinator" ${agent.role === 'coordinator' ? 'selected' : ''}>Coordinator</option>
-                        </select>
-                    </label>
-                    <label>Launch Command <input id="cfg-launch-${agent.id}" placeholder="bash"></label>
-                    <div class="cfg-btns">
-                        <button class="btn-create" onclick="applyConfig('${agent.id}')">Apply & Restart</button>
-                        <button class="btn-cancel" onclick="toggleConfig('${agent.id}')">Cancel</button>
-                    </div>
-                </div>
+                <div class="agent-config-editor" id="cfg-${agent.id}" data-agent-id="${agent.id}"></div>
             `;
             return panel;
         }
@@ -2276,20 +2260,176 @@
 
         function toggleConfig(agentId) {
             const editor = document.getElementById(`cfg-${agentId}`);
+            if (!editor) return;
+            if (!editor.classList.contains('visible')) {
+                // Build fresh markup from the latest AgentInfo. Using innerHTML
+                // keeps state simple: every open starts from the current spec.
+                renderConfigEditor(editor, agentId);
+            }
             editor.classList.toggle('visible');
         }
 
-        async function applyConfig(agentId) {
-            const name = document.getElementById(`cfg-name-${agentId}`).value.trim();
-            const repoPath = document.getElementById(`cfg-path-${agentId}`).value.trim();
-            const role = document.getElementById(`cfg-role-${agentId}`).value;
-            const launch = document.getElementById(`cfg-launch-${agentId}`).value.trim();
+        function renderConfigEditor(editor, agentId) {
+            const entry = agents.get(agentId);
+            const info = entry?.info || null;
+            const spec = info?.spec || null;
+            if (spec) {
+                editor.innerHTML = configEditorSpecHTML(agentId, info, spec);
+                attachConfigPreview(agentId);
+            } else {
+                editor.innerHTML = configEditorLegacyHTML(agentId, info);
+            }
+        }
 
-            const body = {};
-            if (name) body.name = name;
-            if (repoPath) body.repo_path = repoPath;
-            if (role) body.role = role;
-            if (launch) body.launch_command = launch;
+        function configEditorSpecHTML(id, info, spec) {
+            const esc = (s) => (s == null ? '' : String(s).replace(/"/g, '&quot;'));
+            const isRemote = spec.transport && spec.transport !== 'local';
+            return `
+                <label>Role
+                    <select id="cfg-spec-role-${id}">
+                        <option value="worker"${spec.role === 'worker' ? ' selected' : ''}>worker</option>
+                        <option value="coordinator"${spec.role === 'coordinator' ? ' selected' : ''}>coordinator</option>
+                        <option value="qa"${spec.role === 'qa' ? ' selected' : ''}>qa</option>
+                        <option value="pm"${spec.role === 'pm' ? ' selected' : ''}>pm</option>
+                    </select>
+                </label>
+                <label>Transport
+                    <select id="cfg-spec-transport-${id}">
+                        <option value="local"${spec.transport === 'local' ? ' selected' : ''}>local</option>
+                        <option value="mosh"${spec.transport === 'mosh' ? ' selected' : ''}>mosh</option>
+                        <option value="ssh"${spec.transport === 'ssh' ? ' selected' : ''}>ssh</option>
+                    </select>
+                </label>
+                <label>User <input id="cfg-spec-user-${id}" value="${esc(spec.user)}" ${isRemote ? '' : 'disabled'}></label>
+                <label>Host <input id="cfg-spec-host-${id}" value="${esc(spec.host)}" ${isRemote ? '' : 'disabled'}></label>
+                <label>Working dir <input id="cfg-spec-dir-${id}" value="${esc(spec.working_dir)}"></label>
+                <label>Project <input id="cfg-spec-project-${id}" value="${esc(spec.project)}"></label>
+                <label>Agent <input id="cfg-spec-agent-${id}" value="${esc(spec.agent)}"></label>
+                <label>Agent args <input id="cfg-spec-args-${id}" value="${esc(spec.agent_args)}"></label>
+                <div style="color:#4ecca3;font-family:monospace;font-size:11px;margin-top:4px;" id="cfg-spec-preview-${id}"></div>
+                <div style="color:#fcd34d;font-size:11px;" id="cfg-spec-err-${id}"></div>
+                <div class="cfg-btns">
+                    <button class="btn-create" onclick="applyConfig('${id}')">Apply &amp; Restart</button>
+                    <button class="btn-cancel" onclick="toggleConfig('${id}')">Cancel</button>
+                </div>
+            `;
+        }
+
+        function configEditorLegacyHTML(id, info) {
+            const role = info?.role || 'developer';
+            const name = info?.name || id;
+            return `
+                <label>Name <input id="cfg-name-${id}" value="${name.replace(/"/g, '&quot;')}"></label>
+                <label>Repo Path <input id="cfg-path-${id}" placeholder="/path/to/repo"></label>
+                <label>Role
+                    <select id="cfg-role-${id}">
+                        <option value="developer" ${role === 'developer' ? 'selected' : ''}>Developer</option>
+                        <option value="qa" ${role === 'qa' ? 'selected' : ''}>QA</option>
+                        <option value="pm" ${role === 'pm' ? 'selected' : ''}>PM</option>
+                        <option value="coordinator" ${role === 'coordinator' ? 'selected' : ''}>Coordinator</option>
+                    </select>
+                </label>
+                <label>Launch Command <input id="cfg-launch-${id}" placeholder="bash"></label>
+                <div class="cfg-btns">
+                    <button class="btn-create" onclick="applyConfig('${id}')">Apply &amp; Restart</button>
+                    <button class="btn-cancel" onclick="toggleConfig('${id}')">Cancel</button>
+                </div>
+            `;
+        }
+
+        function readSpecFromEditor(id) {
+            const v = (sel) => document.getElementById(sel)?.value.trim() || '';
+            const role = v(`cfg-spec-role-${id}`);
+            const transport = v(`cfg-spec-transport-${id}`);
+            const user = v(`cfg-spec-user-${id}`);
+            const host = v(`cfg-spec-host-${id}`);
+            const dir = v(`cfg-spec-dir-${id}`);
+            const project = v(`cfg-spec-project-${id}`);
+            const agent = v(`cfg-spec-agent-${id}`);
+            const args = v(`cfg-spec-args-${id}`);
+            return {
+                name: id, // immutable; id is the stable key
+                role: role || 'worker',
+                transport: transport || 'local',
+                host: host ? host : null,
+                user: user ? user : null,
+                working_dir: dir,
+                project: project ? project : null,
+                agent: agent,
+                agent_args: args ? args : null,
+            };
+        }
+
+        function specMissingFields(spec) {
+            const missing = [];
+            if (!spec.working_dir) missing.push('working_dir');
+            if (!spec.agent) missing.push('agent');
+            if (spec.transport !== 'local') {
+                if (!spec.host) missing.push('host');
+                if (!spec.user) missing.push('user');
+            }
+            return missing;
+        }
+
+        function specPreview(spec) {
+            const tail = spec.agent_args ? `${spec.agent} ${spec.agent_args}` : spec.agent;
+            const inner = `cd ${spec.working_dir || '<dir>'} && ${tail || '<agent>'}`;
+            if (spec.transport === 'local') return inner;
+            const user = spec.user || '<user>';
+            const host = spec.host || '<host>';
+            return `${spec.transport} ${user}@${host} -- tmux new-session -A -s atn-${spec.name} '${inner}'`;
+        }
+
+        function attachConfigPreview(id) {
+            const refresh = () => {
+                const spec = readSpecFromEditor(id);
+                const preview = document.getElementById(`cfg-spec-preview-${id}`);
+                if (preview) preview.textContent = specPreview(spec);
+                const err = document.getElementById(`cfg-spec-err-${id}`);
+                const missing = specMissingFields(spec);
+                if (err) err.textContent = missing.length ? `missing: ${missing.join(', ')}` : '';
+                // host/user disabled state follows transport.
+                const transport = spec.transport;
+                const remote = transport !== 'local';
+                const userEl = document.getElementById(`cfg-spec-user-${id}`);
+                const hostEl = document.getElementById(`cfg-spec-host-${id}`);
+                if (userEl) userEl.disabled = !remote;
+                if (hostEl) hostEl.disabled = !remote;
+            };
+            ['role', 'transport', 'user', 'host', 'dir', 'project', 'agent', 'args'].forEach((k) => {
+                const el = document.getElementById(`cfg-spec-${k}-${id}`);
+                if (el) {
+                    el.addEventListener('input', refresh);
+                    el.addEventListener('change', refresh);
+                }
+            });
+            refresh();
+        }
+
+        async function applyConfig(agentId) {
+            const entry = agents.get(agentId);
+            const spec = entry?.info?.spec || null;
+            let body;
+            if (spec) {
+                const edited = readSpecFromEditor(agentId);
+                const missing = specMissingFields(edited);
+                if (missing.length) {
+                    const err = document.getElementById(`cfg-spec-err-${agentId}`);
+                    if (err) err.textContent = `missing: ${missing.join(', ')}`;
+                    return;
+                }
+                body = { spec: edited };
+            } else {
+                const name = document.getElementById(`cfg-name-${agentId}`)?.value.trim() || '';
+                const repoPath = document.getElementById(`cfg-path-${agentId}`)?.value.trim() || '';
+                const role = document.getElementById(`cfg-role-${agentId}`)?.value || '';
+                const launch = document.getElementById(`cfg-launch-${agentId}`)?.value.trim() || '';
+                body = {};
+                if (name) body.name = name;
+                if (repoPath) body.repo_path = repoPath;
+                if (role) body.role = role;
+                if (launch) body.launch_command = launch;
+            }
 
             try {
                 const res = await fetch(`${API_BASE}/api/agents/${agentId}`, {
@@ -2304,12 +2444,10 @@
                     if (agent && agent.evtSource) agent.evtSource.close();
                     agent.term.clear();
                     setTimeout(() => connectSSE(agentId), 1000);
-                    // Update header display.
-                    const panel = document.getElementById(`panel-${agentId}`);
-                    if (name) panel.querySelector('.agent-name').textContent = name;
-                    if (role) panel.querySelector('.agent-role').textContent = role;
+                    // Header display will refresh on the next pollStates tick.
                 } else {
-                    alert('Failed to update agent config.');
+                    const text = await res.text().catch(() => '');
+                    alert(`Failed to update agent config. ${text}`);
                 }
             } catch (e) {
                 alert(`Error updating config: ${e}`);

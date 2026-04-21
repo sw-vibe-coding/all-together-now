@@ -670,6 +670,11 @@ struct UpdateAgentBody {
     role: Option<String>,
     setup_commands: Option<Vec<String>>,
     launch_command: Option<String>,
+    /// Structured spawn spec. When present, takes precedence over any
+    /// flat fields above: the server re-composes launch_command from
+    /// the spec and stores the spec in agent_specs so subsequent Save
+    /// / Config flows see the structured shape.
+    spec: Option<SpawnSpec>,
 }
 
 fn parse_role(s: &str) -> atn_core::agent::AgentRole {
@@ -870,39 +875,77 @@ async fn delete_agent(
 }
 
 /// Update an agent's configuration. Restarts the agent with new config.
+///
+/// Two input shapes:
+/// - Structured: `body.spec` is present → validated, launch_command is
+///   recomposed from the spec, and the stored `SpawnSpec` is replaced so
+///   future Save / Config flows see the new structure. Other fields on
+///   `body` are ignored.
+/// - Legacy flat: `body.spec` is None → the individual `name` /
+///   `repo_path` / `role` / `setup_commands` / `launch_command` fields
+///   overlay the current `AgentConfig`. The stored `SpawnSpec` is left
+///   alone (if any).
 async fn update_agent(
     Path(id): Path<String>,
     State(state): State<AppState>,
     Json(body): Json<UpdateAgentBody>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, (StatusCode, String)> {
     let agent_id = AgentId(id.clone());
 
-    // Get current config.
     let mut config = {
         let configs = state.agent_configs.lock().await;
-        configs.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+        configs
+            .get(&id)
+            .cloned()
+            .ok_or((StatusCode::NOT_FOUND, format!("agent '{id}' not found")))?
     };
 
-    // Apply updates.
-    if let Some(name) = body.name {
-        config.name = name;
-    }
-    if let Some(repo_path) = body.repo_path {
-        config.repo_path = if std::path::Path::new(&repo_path).is_absolute() {
-            PathBuf::from(&repo_path)
+    // Apply updates. Structured path takes precedence.
+    let new_spec: Option<SpawnSpec> = if let Some(spec) = body.spec {
+        if let Err(missing) = spec.validate() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("invalid spec — missing/invalid: {}", missing.join(", ")),
+            ));
+        }
+        // Derive AgentConfig fields from the spec.
+        config.role = parse_role(&spec.role);
+        config.launch_command = spec.compose_command();
+        config.name = format!("{} ({})", spec.name, spec.project_label());
+        // repo_path: local → working_dir; remote → base_dir placeholder.
+        config.repo_path = if spec.transport == atn_core::spawn_spec::Transport::Local {
+            let wd = std::path::Path::new(&spec.working_dir);
+            if wd.is_absolute() {
+                wd.to_path_buf()
+            } else {
+                state.base_dir.join(wd)
+            }
         } else {
-            state.base_dir.join(&repo_path)
+            state.base_dir.clone()
         };
-    }
-    if let Some(role) = body.role {
-        config.role = parse_role(&role);
-    }
-    if let Some(setup_commands) = body.setup_commands {
-        config.setup_commands = setup_commands;
-    }
-    if let Some(launch_command) = body.launch_command {
-        config.launch_command = launch_command;
-    }
+        Some(spec)
+    } else {
+        if let Some(name) = body.name {
+            config.name = name;
+        }
+        if let Some(repo_path) = body.repo_path {
+            config.repo_path = if std::path::Path::new(&repo_path).is_absolute() {
+                PathBuf::from(&repo_path)
+            } else {
+                state.base_dir.join(&repo_path)
+            };
+        }
+        if let Some(role) = body.role {
+            config.role = parse_role(&role);
+        }
+        if let Some(setup_commands) = body.setup_commands {
+            config.setup_commands = setup_commands;
+        }
+        if let Some(launch_command) = body.launch_command {
+            config.launch_command = launch_command;
+        }
+        None
+    };
 
     // Shutdown existing session.
     let old_session = {
@@ -918,11 +961,16 @@ async fn update_agent(
         let mut mgr = state.manager.lock().await;
         mgr.spawn_agent(config.clone()).map_err(|e| {
             tracing::error!("Failed to respawn agent '{id}' with new config: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("spawn failed: {e}"),
+            )
         })?;
     }
 
-    // Update stored config and repo path.
+    rearm_heat_tracker(&state, &id).await;
+
+    // Update stored config, repo path, and spec.
     {
         let mut configs = state.agent_configs.lock().await;
         configs.insert(id.clone(), config.clone());
@@ -930,6 +978,10 @@ async fn update_agent(
     {
         let mut repo_paths = state.agent_repo_paths.lock().await;
         repo_paths.insert(id.clone(), config.repo_path);
+    }
+    if let Some(spec) = new_spec {
+        let mut specs = state.agent_specs.lock().await;
+        specs.insert(id.clone(), spec);
     }
 
     tracing::info!("Updated agent: {id}");
