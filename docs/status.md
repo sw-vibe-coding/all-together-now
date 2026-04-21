@@ -60,6 +60,8 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | R5 | Docs refresh: usage, demo walkthrough, cross-links | Done |
 | S1..S5 | Scale-UI saga: heat score, compact tile, CSS-scaled xterm, treemap, pin + keyboard | Done |
 | S6 | Demo scripts: docs/demos-scripts.md menu of runnable demos | Done |
+| S7 | Search + chips + group-by + saved layouts | Done |
+| S8 | Scale-UI fleet (21 fake agents) + docs/scale-ui.md walkthrough | Done |
 
 ## Demo
 

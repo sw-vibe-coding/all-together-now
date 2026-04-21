@@ -42,10 +42,14 @@ walkthrough.
 
 ## Docs
 
+- [docs/demos-scripts.md](docs/demos-scripts.md) — menu of runnable
+  demos, grouped by duration + prereqs.
 - [docs/uber-use-case.md](docs/uber-use-case.md) — the design: per-agent
   isolation via Unix users on remote hosts, coordinated through ATN.
 - [docs/usage.md](docs/usage.md) — operational guide (empty-start,
   New Agent dialog, REST API, env vars).
+- [docs/scale-ui.md](docs/scale-ui.md) — walkthrough of the treemap +
+  filter + pin + keyboard flow at 21 agents.
 - [docs/demo-three-agent.md](docs/demo-three-agent.md) — the concrete
   three-agent demo (coordinator/claude + two remote workers).
 - [docs/remote-pty.md](docs/remote-pty.md) — manual integration test for

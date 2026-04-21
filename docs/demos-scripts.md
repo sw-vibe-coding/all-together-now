@@ -29,12 +29,11 @@ time window.
 | 5 | Graceful delete clears remote tmux      | 2 min    | **Yes**               |
 | 6 | Treemap scale-UI (heat + focus + pin + kbd) | 6 min | No                    |
 | 7 | REST API tour                           | 4 min    | No                    |
+| 8 | Scale-UI fleet (21 fake agents)         | 5–15 min | No                    |
 
-What is **not** demoable yet: a fleet of ~20 fake agents exercising the
-treemap at scale (saga step 8 `scale-demo-docs`), the `/`-search + role
-filter chips + group-by-role packing (saga step 7
-`search-filter-groups`), and the Ollama / CUDA transports (future
-sagas).
+What is **not** demoable yet: the Ollama / CUDA transports (future
+sagas). Everything else in the scale-UI saga (search, chips, grouping,
+saved layouts, the 21-agent fleet) is shipped.
 
 ---
 
@@ -421,6 +420,63 @@ Delete any lingering agents (the last curl above does it).
 
 ---
 
+---
+
+## Demo 8 — Scale-UI fleet (21 fake agents)
+
+**What it shows**
+- Everything scale-UI saga steps 1–7: heat-sized treemap, click-to-focus
+  with 5 s freeze, compact tiles below threshold, pin row, keyboard
+  shortcuts, `/` filter + transport/role/state chips, group-by-role
+  packing, saved layouts, localStorage persistence.
+- Five distinct activity profiles via `tools/fake-agent-profile`:
+  spammer (hot), quiet (tiny), periodic (pulsing), awaiting-input
+  (state-boosted), error (5 s then Disconnected).
+
+**Why it matters**
+- Single command stands up a realistic fleet; the treemap earns its
+  keep at 20+ agents where the old cols-N grid ran out of room.
+
+**Setup**
+```bash
+./demos/scale/setup.sh
+```
+The script boots (or reuses) `atn-server` on :7500 and POSTs 21 agents
+(1 coordinator + 4 spammers + 8 quiet + 4 periodic + 2 awaiting + 2
+error).
+
+**Steps**
+See [docs/scale-ui.md](./scale-ui.md) for the full guided walkthrough
+(8 exercises: click-to-focus, pin row, 1–9 keyboard, `/` filter, chip
+interactions, group-by, saved layouts, disconnect visibility). The
+short version:
+
+1. Open http://localhost:7500 — treemap fills in within a few seconds.
+   Coordinator is focus; spammers dominate the right side.
+2. Press `1` to focus the hottest spammer. Press `p` to pin it. Press
+   `Esc` to clear focus.
+3. Press `/` and type `quiet` — treemap narrows to the 8 quiet agents.
+4. Toggle **group-by: role** — watch the treemap pack into labeled
+   clusters.
+5. Click **Save** under Layouts. Name it `quiet-focus`. Refresh the
+   browser — your layout comes back.
+
+**Cleanup**
+Ctrl-C the terminal running `setup.sh`, or:
+```bash
+for id in coord-main spammer-0{1,2,3,4} quiet-0{1,2,3,4,5,6,7,8} \
+          periodic-0{1,2,3,4} awaiting-0{1,2} error-0{1,2}; do
+    curl -X DELETE http://localhost:7500/api/agents/$id
+done
+```
+
+**Variations**
+- Edit `demos/scale/setup.sh` to change counts or mix in more
+  `awaiting-input` agents to see how the state boost dominates the
+  treemap.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
@@ -433,16 +489,13 @@ Delete any lingering agents (the last curl above does it).
 
 ## When new demos arrive
 
-- Saga step 7 `search-filter-groups` ships: add a demo for `/`-filter
-  and role chips.
-- Saga step 8 `scale-demo-docs` ships: add a "fleet of 20 agents"
-  demo exercising the treemap under load.
-- Future Ollama / CUDA / git-sync sagas: each gets its own section.
+- Future Ollama / CUDA / git-sync sagas: each gets its own section here.
 
 See also:
 - [docs/usage.md](./usage.md) — operational guide
 - [docs/uber-use-case.md](./uber-use-case.md) — design story
 - [docs/demo-three-agent.md](./demo-three-agent.md) — the three-agent
   demo in more depth
+- [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
 - [docs/remote-pty.md](./remote-pty.md) — manual remote PTY
   walkthrough

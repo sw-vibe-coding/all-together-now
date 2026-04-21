@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Fake agent with pluggable activity profile. Used by the scale-UI demo
+# (demos/scale/setup.sh) to populate the dashboard with a mix of agents
+# whose output patterns exercise different parts of the treemap:
+#
+#   spammer         — prints a line every 100 ms (large tile, hot)
+#   quiet           — prints a banner, then cats stdin (tiny tile)
+#   periodic        — ~10 s of output, ~30 s silent, repeat (pulsing tile)
+#   awaiting-input  — prints a (y/n) prompt and waits (state boost → hot)
+#   error           — crashes after 5 s with non-zero exit (flash red, go away)
+#
+# Usage:
+#   fake-agent-profile <profile>
+# Invoked by ATN as: cd DIR && fake-agent-profile spammer
+
+profile="${1:-quiet}"
+
+banner() {
+    printf 'fake-agent-profile[%s]: running as %s\n' "$profile" "$profile"
+}
+
+case "$profile" in
+    spammer)
+        banner
+        i=0
+        while :; do
+            printf 'spam %04d — the quick brown fox jumped over the lazy dog\n' "$i"
+            i=$((i + 1))
+            sleep 0.1
+        done
+        ;;
+    quiet)
+        banner
+        while IFS= read -r line; do
+            printf 'quiet> %s\n' "$line"
+        done
+        ;;
+    periodic)
+        banner
+        while :; do
+            # 10s of roughly 1 line/sec.
+            for _ in $(seq 1 10); do
+                printf 'periodic tick %s\n' "$(date +%s)"
+                sleep 1
+            done
+            # 30s silent.
+            sleep 30
+        done
+        ;;
+    awaiting-input)
+        banner
+        printf 'Do you want to proceed? (y/n) '
+        # Block forever on stdin — the (y/n) marker drives the state
+        # tracker to AgentState::AwaitingHumanInput.
+        cat >/dev/null
+        ;;
+    error)
+        banner
+        printf 'initializing subsystem...\n'
+        sleep 1
+        printf 'loading config...\n'
+        sleep 1
+        printf 'starting workers...\n'
+        sleep 1
+        printf 'work item 1/3 done\n'
+        sleep 1
+        printf 'work item 2/3 done\n'
+        sleep 1
+        printf 'FATAL: everything broke\n' >&2
+        exit 1
+        ;;
+    *)
+        printf 'fake-agent-profile: unknown profile %q\n' "$profile" >&2
+        exit 2
+        ;;
+esac
