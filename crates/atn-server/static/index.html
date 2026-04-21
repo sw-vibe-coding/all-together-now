@@ -18,6 +18,30 @@
         .dashboard.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
         .dashboard.cols-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
+        /* Filter bar: text input + chips + group toggle + saved-layouts dropdown.
+           Sits between the view tabs (in the main header) and the pin row. */
+        .filter-bar { display: none; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #0f3460; background: #16213e; align-items: center; flex-wrap: wrap; flex-shrink: 0; }
+        .filter-bar.visible { display: flex; }
+        .filter-bar input#filter-input { flex: 0 1 240px; padding: 5px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
+        .filter-bar input#filter-input:focus { border-color: #e94560; }
+        .filter-bar .chip { padding: 3px 10px; font-size: 11px; border: 1px solid #0f3460; background: transparent; color: #888; border-radius: 12px; cursor: pointer; }
+        .filter-bar .chip:hover { color: #c9d1d9; border-color: #1e3a5f; }
+        .filter-bar .chip.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
+        .filter-bar .group-section { display: flex; align-items: center; gap: 4px; }
+        .filter-bar .group-section label { font-size: 11px; color: #888; }
+        .filter-bar .group-section select { padding: 3px 6px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 11px; }
+        .filter-bar .layouts-section { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+        .filter-bar .layouts-section select { padding: 3px 6px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 11px; min-width: 120px; }
+        .filter-bar .layouts-section button { padding: 3px 10px; background: transparent; border: 1px solid #0f3460; border-radius: 4px; color: #888; cursor: pointer; font-size: 11px; }
+        .filter-bar .layouts-section button:hover { color: #4ecca3; border-color: #4ecca3; }
+        .filter-bar .filter-hint { font-size: 10px; color: #6b7280; margin-left: 4px; }
+        .pin-cell.filtered .pin-name::after { content: ' (filtered)'; color: #6b7280; font-weight: 400; font-style: italic; }
+
+        /* Group bands in the treemap — subtle borders around each role
+           or project cluster. Applied to a positioned overlay rect. */
+        .group-band { position: absolute; border: 1px dashed #2d3a63; border-radius: 4px; pointer-events: none; }
+        .group-band .group-label { position: absolute; top: -8px; left: 8px; font-size: 10px; background: #16213e; color: #888; padding: 0 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+
         /* Pin row — horizontal strip above the dashboard showing agents the
            user has explicitly pinned. Pinned agents are excluded from the
            heat-sized treemap so their visible size stays stable. */
@@ -348,6 +372,34 @@
                 <span id="new-agent-preview" style="color:#4ecca3;font-family:monospace;font-size:11px;"></span>
             </div>
         </div>
+    </div>
+    <div class="filter-bar" id="filter-bar">
+        <input type="text" id="filter-input" placeholder="Filter agents (press /)" />
+        <button class="chip" data-chip="transport:local">local</button>
+        <button class="chip" data-chip="transport:mosh">mosh</button>
+        <button class="chip" data-chip="transport:ssh">ssh</button>
+        <button class="chip" data-chip="role:coordinator">coordinator</button>
+        <button class="chip" data-chip="role:worker">worker</button>
+        <button class="chip" data-chip="role:qa">qa</button>
+        <button class="chip" data-chip="state:awaiting_human_input">awaiting-input</button>
+        <button class="chip" data-chip="state:error">error</button>
+        <button class="chip" data-chip="state:disconnected">disconnected</button>
+        <span class="group-section">
+            <label for="group-by">group</label>
+            <select id="group-by">
+                <option value="">none</option>
+                <option value="role">role</option>
+                <option value="project">project</option>
+            </select>
+        </span>
+        <span class="filter-hint" id="filter-hint"></span>
+        <span class="layouts-section">
+            <label style="font-size:11px;color:#888;">layout</label>
+            <select id="saved-layouts"><option value="">— saved —</option></select>
+            <button id="layout-save" title="Save current layout">Save</button>
+            <button id="layout-apply" title="Apply selected layout">Apply</button>
+            <button id="layout-delete" title="Delete selected layout">Delete</button>
+        </span>
     </div>
     <div class="pin-row" id="pin-row"></div>
     <div class="dashboard" id="dashboard"></div>
@@ -1031,7 +1083,60 @@
             enabled: false,
             pins: new Set(),
             focusSize: 'medium', // 'medium' | 'large'
+            filterText: '',
+            // Set of "transport:mosh", "role:worker", "state:error" etc.
+            // Within a category chips OR; across categories they AND.
+            filterChips: new Set(),
+            groupBy: '', // '' | 'role' | 'project'
         };
+
+        /** Returns true if agentId passes the current filter. Pinned agents
+         *  are not auto-included here — callers decide whether to override
+         *  (pin row shows pinned regardless; treemap does not). */
+        function matchesFilter(agentId) {
+            const entry = agents.get(agentId);
+            if (!entry) return false;
+            const info = entry.info || {};
+            const spec = info.spec || {};
+
+            // Text match: fuzzy substring across name, project, role,
+            // spec.host, spec.user. Case-insensitive.
+            const q = (layoutState.filterText || '').trim().toLowerCase();
+            if (q) {
+                const hay = [
+                    info.name || agentId,
+                    spec.project || '',
+                    info.role || '',
+                    spec.host || '',
+                    spec.user || '',
+                    spec.agent || '',
+                ].join(' ').toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+
+            // Chips partitioned by category; within a category, any chip in
+            // the set is a match (OR); across categories, all must match (AND).
+            if (layoutState.filterChips.size > 0) {
+                const byCat = new Map();
+                for (const chip of layoutState.filterChips) {
+                    const [cat, val] = chip.split(':');
+                    if (!byCat.has(cat)) byCat.set(cat, new Set());
+                    byCat.get(cat).add(val);
+                }
+                const transport = (spec.transport || 'local').toLowerCase();
+                const role = (info.role || '').toLowerCase();
+                const stateKeyNow = stateKey(info.state || { state: 'idle' });
+                for (const [cat, vals] of byCat) {
+                    let val;
+                    if (cat === 'transport') val = transport;
+                    else if (cat === 'role') val = role;
+                    else if (cat === 'state') val = stateKeyNow;
+                    else continue;
+                    if (!vals.has(val)) return false;
+                }
+            }
+            return true;
+        }
 
         function saveLayoutPrefs() {
             try {
@@ -1044,6 +1149,82 @@
             } catch (_) { /* localStorage unavailable or full — ignore */ }
         }
 
+        // --- Saved layouts ---
+        const SAVED_LAYOUTS_KEY = 'atn-scale-ui-saved-layouts-v1';
+
+        function listSavedLayouts() {
+            try {
+                return JSON.parse(localStorage.getItem(SAVED_LAYOUTS_KEY) || '{}') || {};
+            } catch (_) {
+                return {};
+            }
+        }
+
+        function writeSavedLayouts(map) {
+            try {
+                localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(map));
+            } catch (_) {}
+        }
+
+        function saveNamedLayout(name) {
+            if (!name) return;
+            const map = listSavedLayouts();
+            map[name] = {
+                pins: Array.from(layoutState.pins),
+                focusId: layoutState.focusId,
+                focusSize: layoutState.focusSize,
+                filterText: layoutState.filterText,
+                filterChips: Array.from(layoutState.filterChips),
+                groupBy: layoutState.groupBy,
+            };
+            writeSavedLayouts(map);
+            refreshSavedLayoutsDropdown();
+        }
+
+        function applyNamedLayout(name) {
+            const map = listSavedLayouts();
+            const lyt = map[name];
+            if (!lyt) return;
+            layoutState.pins = new Set(lyt.pins || []);
+            layoutState.focusId = lyt.focusId || null;
+            layoutState.focusSize = lyt.focusSize === 'large' ? 'large' : 'medium';
+            layoutState.filterText = lyt.filterText || '';
+            layoutState.filterChips = new Set(lyt.filterChips || []);
+            layoutState.groupBy = lyt.groupBy || '';
+            saveLayoutPrefs();
+            // Reflect state in the filter bar UI.
+            const input = document.getElementById('filter-input');
+            if (input) input.value = layoutState.filterText;
+            document.querySelectorAll('.filter-bar .chip').forEach((c) => {
+                c.classList.toggle('active', layoutState.filterChips.has(c.getAttribute('data-chip')));
+            });
+            const gSel = document.getElementById('group-by');
+            if (gSel) gSel.value = layoutState.groupBy;
+            renderPinRow();
+            syncPinButtons();
+            const dashboard = document.getElementById('dashboard');
+            if (dashboard && layoutState.enabled) {
+                applyLayout(computeLayout(dashboard));
+            }
+        }
+
+        function deleteNamedLayout(name) {
+            if (!name) return;
+            const map = listSavedLayouts();
+            delete map[name];
+            writeSavedLayouts(map);
+            refreshSavedLayoutsDropdown();
+        }
+
+        function refreshSavedLayoutsDropdown() {
+            const sel = document.getElementById('saved-layouts');
+            if (!sel) return;
+            const map = listSavedLayouts();
+            const names = Object.keys(map).sort();
+            sel.innerHTML = '<option value="">— saved —</option>'
+                + names.map((n) => `<option value="${n}">${n}</option>`).join('');
+        }
+
         function loadLayoutPrefs() {
             try {
                 const raw = localStorage.getItem(LAYOUT_PREFS_KEY);
@@ -1054,7 +1235,73 @@
                 if (data.focusSize === 'medium' || data.focusSize === 'large') {
                     layoutState.focusSize = data.focusSize;
                 }
+                if (typeof data.filterText === 'string') layoutState.filterText = data.filterText;
+                if (Array.isArray(data.filterChips)) {
+                    layoutState.filterChips = new Set(data.filterChips);
+                }
+                if (data.groupBy === 'role' || data.groupBy === 'project') {
+                    layoutState.groupBy = data.groupBy;
+                }
             } catch (_) { /* malformed prefs — drop */ }
+        }
+
+        function setupFilterBar() {
+            const input = document.getElementById('filter-input');
+            if (input) {
+                input.value = layoutState.filterText || '';
+                input.addEventListener('input', () => {
+                    layoutState.filterText = input.value;
+                    saveLayoutPrefs();
+                    const dashboard = document.getElementById('dashboard');
+                    if (dashboard && layoutState.enabled) {
+                        applyLayout(computeLayout(dashboard));
+                    }
+                });
+            }
+            document.querySelectorAll('.filter-bar .chip[data-chip]').forEach((c) => {
+                const chip = c.getAttribute('data-chip');
+                c.classList.toggle('active', layoutState.filterChips.has(chip));
+                c.addEventListener('click', () => {
+                    if (layoutState.filterChips.has(chip)) {
+                        layoutState.filterChips.delete(chip);
+                    } else {
+                        layoutState.filterChips.add(chip);
+                    }
+                    c.classList.toggle('active', layoutState.filterChips.has(chip));
+                    saveLayoutPrefs();
+                    const dashboard = document.getElementById('dashboard');
+                    if (dashboard && layoutState.enabled) {
+                        applyLayout(computeLayout(dashboard));
+                    }
+                });
+            });
+            const gSel = document.getElementById('group-by');
+            if (gSel) {
+                gSel.value = layoutState.groupBy || '';
+                gSel.addEventListener('change', () => {
+                    layoutState.groupBy = gSel.value;
+                    saveLayoutPrefs();
+                    const dashboard = document.getElementById('dashboard');
+                    if (dashboard && layoutState.enabled) {
+                        applyLayout(computeLayout(dashboard));
+                    }
+                });
+            }
+            const saveBtn = document.getElementById('layout-save');
+            if (saveBtn) saveBtn.addEventListener('click', () => {
+                const name = prompt('Name this layout:');
+                if (name) saveNamedLayout(name);
+            });
+            const applyBtn = document.getElementById('layout-apply');
+            if (applyBtn) applyBtn.addEventListener('click', () => {
+                const sel = document.getElementById('saved-layouts');
+                if (sel && sel.value) applyNamedLayout(sel.value);
+            });
+            const delBtn = document.getElementById('layout-delete');
+            if (delBtn) delBtn.addEventListener('click', () => {
+                const sel = document.getElementById('saved-layouts');
+                if (sel && sel.value) deleteNamedLayout(sel.value);
+            });
         }
 
         function syncPinButtons() {
@@ -1138,6 +1385,13 @@
             }
         }
 
+        function syncPinFilteredLabels() {
+            document.querySelectorAll('.pin-cell[data-agent-id]').forEach((cell) => {
+                const id = cell.getAttribute('data-agent-id');
+                cell.classList.toggle('filtered', !matchesFilter(id));
+            });
+        }
+
         function refreshPinCell(agentId) {
             const cell = document.querySelector(`.pin-cell[data-agent-id="${agentId}"]`);
             if (!cell) return;
@@ -1176,9 +1430,12 @@
         function buildLayoutItems() {
             // Floor so a zero-heat agent still has a visible tile area.
             // Pinned agents live in the pin row and are excluded from the
-            // heat-sized treemap.
+            // heat-sized treemap. Filtered-out agents also get hidden
+            // (matchesFilter returned false).
             const FLOOR = 0.02;
-            const ids = Array.from(agents.keys()).filter((id) => !layoutState.pins.has(id));
+            const ids = Array.from(agents.keys()).filter(
+                (id) => !layoutState.pins.has(id) && matchesFilter(id),
+            );
             return ids.map((id) => ({
                 id,
                 value: Math.max(FLOOR, layoutState.smoothed.get(id) ?? FLOOR),
@@ -1211,7 +1468,7 @@
             }
 
             if (rest.length === 0) {
-                return { focus: { id: focusId, ...rect }, tiles: [] };
+                return { focus: { id: focusId, ...rect }, tiles: [], groups: [] };
             }
 
             // Focus panel gets the left slice. Width scales with relative
@@ -1233,8 +1490,78 @@
                 h: rect.h,
             };
 
+            // Group packing, if enabled: partition rest into group sub-rects
+            // proportional to each group's total heat, then squarify inside.
+            if (layoutState.groupBy) {
+                const groups = groupItems(rest, layoutState.groupBy);
+                const { tiles, bands } = groupedSquarify(restRect, groups);
+                return { focus: { id: focusId, ...focusRect }, tiles, groups: bands };
+            }
+
             const tiles = squarify(restRect, rest);
-            return { focus: { id: focusId, ...focusRect }, tiles };
+            return { focus: { id: focusId, ...focusRect }, tiles, groups: [] };
+        }
+
+        /** Partition items by a group key drawn from agent meta. Returns an
+         *  ordered Map so iteration order is stable (largest first). */
+        function groupItems(items, key) {
+            const groups = new Map();
+            for (const it of items) {
+                const entry = agents.get(it.id);
+                const info = entry?.info || {};
+                const spec = info.spec || {};
+                let g;
+                if (key === 'role') g = (info.role || 'other').toLowerCase();
+                else if (key === 'project') g = spec.project || info.name || 'other';
+                else g = 'other';
+                if (!groups.has(g)) groups.set(g, []);
+                groups.get(g).push(it);
+            }
+            // Sort by total value desc so the biggest group gets the
+            // largest rect.
+            const sorted = Array.from(groups.entries())
+                .map(([k, arr]) => ({
+                    key: k,
+                    items: arr,
+                    total: arr.reduce((s, i) => s + i.value, 0),
+                }))
+                .sort((a, b) => b.total - a.total);
+            return sorted;
+        }
+
+        /** Lay out grouped items: split `rect` horizontally (or vertically if
+         *  the rect is taller than wide) by group weights, then squarify
+         *  inside each sub-rect. Returns {tiles, bands} where bands are
+         *  overlay rects (for group outlines). */
+        function groupedSquarify(rect, groups) {
+            if (groups.length === 0) return { tiles: [], bands: [] };
+            const total = groups.reduce((s, g) => s + g.total, 0);
+            if (total <= 0) return { tiles: [], bands: [] };
+
+            const horizontal = rect.w >= rect.h;
+            const tiles = [];
+            const bands = [];
+            let cursor = horizontal ? rect.x : rect.y;
+            const GAP = 4;
+            for (let i = 0; i < groups.length; i++) {
+                const g = groups[i];
+                const frac = g.total / total;
+                let sub;
+                const thisGap = i === groups.length - 1 ? 0 : GAP;
+                if (horizontal) {
+                    const w = Math.max(40, Math.floor(rect.w * frac) - thisGap);
+                    sub = { x: cursor, y: rect.y, w, h: rect.h };
+                    cursor += w + thisGap;
+                } else {
+                    const h = Math.max(40, Math.floor(rect.h * frac) - thisGap);
+                    sub = { x: rect.x, y: cursor, w: rect.w, h };
+                    cursor += h + thisGap;
+                }
+                const placed = squarify({ x: sub.x + 2, y: sub.y + 12, w: sub.w - 4, h: sub.h - 14 }, g.items);
+                for (const t of placed) tiles.push(t);
+                bands.push({ key: g.key, ...sub });
+            }
+            return { tiles, bands };
         }
 
         function ensureModeFor(id, rect) {
@@ -1265,6 +1592,23 @@
                     el.classList.toggle('focus', !!isFocus);
                 }
             };
+            // Clear any filtered-out tiles: hide mounted elements that no
+            // longer appear in the layout so old positions don't linger.
+            const visibleIds = new Set();
+            if (layout.focus) visibleIds.add(layout.focus.id);
+            for (const t of layout.tiles) visibleIds.add(t.id);
+            for (const id of agents.keys()) {
+                if (layoutState.pins.has(id)) continue;
+                if (visibleIds.has(id)) continue;
+                const el = document.getElementById(`panel-${id}`)
+                    || document.getElementById(`compact-${id}`);
+                if (el) {
+                    el.style.left = '-9999px';
+                    el.style.top = '-9999px';
+                    el.style.width = '0';
+                    el.style.height = '0';
+                }
+            }
             if (layout.focus) {
                 ensureModeFor(layout.focus.id, layout.focus);
                 place(layout.focus.id, layout.focus, true);
@@ -1273,6 +1617,24 @@
                 ensureModeFor(t.id, t);
                 place(t.id, t, false);
             }
+            // Render / refresh group bands (overlays). Always rebuild; they're
+            // cheap, non-interactive divs.
+            dashboard.querySelectorAll('.group-band').forEach((b) => b.remove());
+            for (const band of (layout.groups || [])) {
+                const div = document.createElement('div');
+                div.className = 'group-band';
+                div.style.left = `${band.x}px`;
+                div.style.top = `${band.y}px`;
+                div.style.width = `${band.w}px`;
+                div.style.height = `${band.h}px`;
+                const label = document.createElement('span');
+                label.className = 'group-label';
+                label.textContent = band.key;
+                div.appendChild(label);
+                dashboard.appendChild(div);
+            }
+            // Refresh the pin row so (filtered) labels update.
+            syncPinFilteredLabels();
             // After positions change, update per-xterm scales.
             updateTileScales();
         }
@@ -1613,6 +1975,13 @@
                         badge.className = `state-badge state-${sk}`;
                         badge.textContent = stateLabel(agent.state);
                     }
+                    // Stash the full AgentInfo on the agents map so the
+                    // filter can match on spec.host / spec.user / role /
+                    // state without a second fetch.
+                    const entry = agents.get(agent.id);
+                    if (entry) {
+                        entry.info = agent;
+                    }
                 }
             } catch (_) { /* ignore */ }
         }
@@ -1706,11 +2075,20 @@
             // Start heat polling; feeds smoothedHeat for the treemap.
             startHeatPolling();
 
-            // Hydrate user prefs (pins + focus + focus size) before the
-            // first layout so they're honored on the very first render.
+            // Hydrate user prefs (pins + focus + focus size + filter +
+            // group-by) before the first layout so they're honored on the
+            // very first render.
             loadLayoutPrefs();
             renderPinRow();
             syncPinButtons();
+
+            // Wire the filter bar.
+            setupFilterBar();
+            refreshSavedLayoutsDropdown();
+
+            // Show the filter bar once at least one agent exists.
+            const fbar = document.getElementById('filter-bar');
+            if (fbar && agentList.length > 0) fbar.classList.add('visible');
 
             // Flip the dashboard into treemap mode whenever at least one
             // agent is present (empty-state stays as the CTA card).
@@ -1871,8 +2249,11 @@
             connectSSE(agent.id);
             setupControls(agent.id);
             refreshDashboardLayout();
-            // If this is the first agent, flip to treemap mode. Otherwise
-            // the running refresh tick will place the new tile within 1.5s.
+            // If this is the first agent, flip to treemap mode + reveal
+            // the filter bar. Otherwise the running refresh tick will
+            // place the new tile within 1.5s.
+            const fbar = document.getElementById('filter-bar');
+            if (fbar) fbar.classList.add('visible');
             if (!layoutState.enabled) {
                 enableTreemapMode();
             } else {
