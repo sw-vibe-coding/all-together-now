@@ -168,6 +168,13 @@
         .view-tab.active { background: #0f3460; color: #e0e0e0; }
         .view-tab:hover { color: #e0e0e0; }
 
+        /* Layout selector — Tiled / Stack toggle in the top bar. */
+        .layout-selector { display: flex; gap: 4px; margin-left: 8px; }
+        .layout-selector .layout-label { font-size: 11px; color: #888; align-self: center; margin-right: 2px; }
+        .layout-btn { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
+        .layout-btn:hover { color: #e0e0e0; }
+        .layout-btn.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
+
         /* Wiki browser */
         .wiki-container { flex: 1; display: flex; min-height: 0; overflow: hidden; }
         .wiki-sidebar { width: 220px; border-right: 1px solid #0f3460; overflow-y: auto; padding: 8px 0; flex-shrink: 0; }
@@ -343,6 +350,11 @@
         <span class="agent-count" id="agent-count"></span>
         <button class="btn-save-cfg" id="btn-save-toml" onclick="saveToToml()" title="Save current agents to agents.toml">Save</button>
         <button style="padding:4px 10px;border:1px solid #0f3460;border-radius:4px;background:transparent;color:#4ecca3;cursor:pointer;font-size:12px;" id="btn-new-agent" onclick="toggleNewAgent()">+ Agent</button>
+        <div class="layout-selector" id="layout-selector" title="Window layout mode">
+            <span class="layout-label">layout</span>
+            <button class="layout-btn active" data-layout="tiled">Tiled</button>
+            <button class="layout-btn" data-layout="stack">Stack</button>
+        </div>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
             <button class="view-tab" id="tab-graph" onclick="switchView('graph')">Graph</button>
@@ -758,10 +770,16 @@
         // Single delegated click listener for everything inside an
         // agent panel's header: icon buttons + header body click.
         document.addEventListener('click', (e) => {
-            // Dock cell clicks restore the agent.
+            // Dock cell clicks restore the agent — or, in Stack mode,
+            // swap it into the primary slot.
             const dockCell = e.target.closest('.dock-cell[data-window-id]');
             if (dockCell) {
-                windowRestore(dockCell.getAttribute('data-window-id'));
+                const id = dockCell.getAttribute('data-window-id');
+                if (layoutState.layoutMode === 'stack') {
+                    stackPromote(id);
+                } else {
+                    windowRestore(id);
+                }
                 return;
             }
             // Chrome icon buttons on a window header.
@@ -1705,6 +1723,89 @@
             return ids.map((id) => ({ id }));
         }
 
+        // Stack-mode helpers.
+        //
+        // Stack mode keeps exactly one window "primary" (state = normal)
+        // and dock-minimizes the rest. Primary preference: whatever is
+        // currently `state:normal` in storage → selectedId → coord → first.
+        function pickStackPrimary(all) {
+            if (!all || all.length === 0) return null;
+            const normal = all.find((it) => windowState(it.id) === 'normal');
+            if (normal) return normal.id;
+            if (layoutState.selectedId
+                && all.some((it) => it.id === layoutState.selectedId)) {
+                return layoutState.selectedId;
+            }
+            const coord = all.find((it) => roleOf(it.id) === 'coordinator');
+            if (coord) return coord.id;
+            return all[0].id;
+        }
+
+        function enterStackMode() {
+            // Reconcile stored state: one normal + rest minimized.
+            const all = buildLayoutItems();
+            if (all.length === 0) return;
+            let primaryId = null;
+            if (layoutState.selectedId
+                && all.some((it) => it.id === layoutState.selectedId)) {
+                primaryId = layoutState.selectedId;
+            } else {
+                const coord = all.find((it) => roleOf(it.id) === 'coordinator');
+                primaryId = coord ? coord.id : all[0].id;
+            }
+            for (const it of all) {
+                ensureWindow(it.id).state = (it.id === primaryId) ? 'normal' : 'minimized';
+            }
+            layoutState.selectedId = primaryId;
+        }
+
+        function leaveStackMode() {
+            // Restore every non-pinned window to normal on exit.
+            const all = buildLayoutItems();
+            for (const it of all) {
+                ensureWindow(it.id).state = 'normal';
+            }
+        }
+
+        function stackPromote(id) {
+            // Clicked dock cell becomes primary; previous primary minimizes.
+            const all = buildLayoutItems();
+            for (const it of all) {
+                ensureWindow(it.id).state = (it.id === id) ? 'normal' : 'minimized';
+            }
+            layoutState.selectedId = id;
+            saveLayoutPrefs();
+            applyLayoutFresh();
+        }
+
+        function setLayoutMode(mode) {
+            if (mode !== 'tiled' && mode !== 'stack') return;
+            const prev = layoutState.layoutMode;
+            if (prev === mode) return;
+            if (mode === 'stack') {
+                enterStackMode();
+            } else if (prev === 'stack') {
+                leaveStackMode();
+            }
+            layoutState.layoutMode = mode;
+            saveLayoutPrefs();
+            updateLayoutSelector();
+            applyLayoutFresh();
+        }
+
+        function updateLayoutSelector() {
+            document.querySelectorAll('.layout-btn[data-layout]').forEach((btn) => {
+                btn.classList.toggle('active', btn.dataset.layout === layoutState.layoutMode);
+            });
+        }
+
+        function setupLayoutSelector() {
+            document.querySelectorAll('.layout-btn[data-layout]').forEach((btn) => {
+                btn.addEventListener('click', () => setLayoutMode(btn.dataset.layout));
+            });
+            updateLayoutSelector();
+        }
+
         // --- Windowed layout (saga: windowed-ui) ---
         //
         // Layout is mode-driven: the step-1 foundation supports `tiled`
@@ -1770,6 +1871,25 @@
                 };
                 const implicitDock = all.filter((it) => it.id !== maxed.id);
                 return { windows: [maxRect], minimized: implicitDock };
+            }
+
+            // Stack mode: one primary window at ~80% viewport + everything
+            // else in the bottom dock. Primary = selected (if any) → coord
+            // → first in sort order. Stored window state is also kept in
+            // sync on mode transitions so a refresh renders the same way.
+            if (layoutState.layoutMode === 'stack') {
+                const primaryId = pickStackPrimary(all);
+                if (!primaryId) return { windows: [], minimized: all };
+                const pW = Math.floor(rect.w * 0.8);
+                const pH = Math.floor(rect.h * 0.9);
+                const primaryRect = {
+                    id: primaryId,
+                    x: rect.x + Math.floor((rect.w - pW) / 2),
+                    y: rect.y + Math.floor((rect.h - pH) / 2),
+                    w: pW, h: pH,
+                };
+                const implicitDock = all.filter((it) => it.id !== primaryId);
+                return { windows: [primaryRect], minimized: implicitDock };
             }
 
             // Otherwise lay out normal-state agents (dock minimized separately).
@@ -2402,6 +2522,13 @@
             // Wire the filter bar.
             setupFilterBar();
             refreshSavedLayoutsDropdown();
+            setupLayoutSelector();
+            // Stack mode persisted from a prior session: reconcile stored
+            // window state before the first layout so the primary vs.
+            // minimized split is consistent with the layoutMode.
+            if (layoutState.layoutMode === 'stack') {
+                enterStackMode();
+            }
 
             // Show the filter bar once at least one agent exists.
             const fbar = document.getElementById('filter-bar');
@@ -2624,6 +2751,11 @@
             agents.set(agent.id, { term, fitAddon, panel, evtSource: null, nativeW, nativeH });
             connectSSE(agent.id);
             setupControls(agent.id);
+            // Stack mode keeps a single primary; new agents join minimized
+            // so they don't hijack the main slot.
+            if (layoutState.layoutMode === 'stack') {
+                ensureWindow(agent.id).state = 'minimized';
+            }
             refreshDashboardLayout();
             // If this is the first agent, flip to treemap mode + reveal
             // the filter bar. Otherwise the running refresh tick will
