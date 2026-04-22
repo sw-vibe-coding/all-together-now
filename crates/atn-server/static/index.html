@@ -70,10 +70,11 @@
            Tiles get their inset from computeLayout(). Smooth transitions
            keep the layout from feeling jittery at the 1.5s refresh cadence. */
         .dashboard.treemap-mode { display: block; position: relative; overflow: hidden; padding: 4px; gap: 0; }
+        /* No transitions on position/size — instant snaps read as less
+           "zoomy" than animated changes when the treemap recomputes. */
         .dashboard.treemap-mode .agent-panel,
         .dashboard.treemap-mode .agent-compact {
             position: absolute;
-            transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease;
             min-height: 0;
         }
         .dashboard.treemap-mode .agent-panel.focus { outline: 2px solid #e94560; outline-offset: -2px; }
@@ -396,6 +397,7 @@
         </span>
         <span class="filter-hint" id="filter-hint"></span>
         <span class="layouts-section">
+            <button id="btn-refresh-layout" title="Recompute the treemap from current heat" style="color:#4ecca3;">↻ Refresh</button>
             <label style="font-size:11px;color:#888;">layout</label>
             <select id="saved-layouts"><option value="">— saved —</option></select>
             <button id="layout-save" title="Save current layout">Save</button>
@@ -522,6 +524,7 @@
                 const res = await fetch(`${API_BASE}/api/agents/heat`);
                 if (!res.ok) return;
                 const list = await res.json();
+                const summary = {};
                 for (const h of list) {
                     const a = ensureAgentMeta(h.id);
                     if (!a) continue;
@@ -533,7 +536,9 @@
                     // sizes don't jitter on tiny byte bursts.
                     updateSmoothedHeat(h.id, h.heat);
                     refreshCompactIfPresent(h.id);
+                    summary[h.id] = h.heat.toFixed(3);
                 }
+                atnDebug.log('heat:poll', summary);
             } catch (_) { /* transient network; next tick retries */ }
         }
 
@@ -777,6 +782,12 @@
         // the compact-tile variant from step 2 instead of showing an
         // unreadable xterm.
 
+        // Native xterm geometry — referenced by the scale picker below and
+        // by initTerminal further down. Declared here so both sites see it
+        // without hitting a temporal-dead-zone error at load time.
+        const TERM_NATIVE_COLS = 120;
+        const TERM_NATIVE_ROWS = 40;
+
         const TILE_SCALES = [0.25, 0.33, 0.5, 0.66, 0.8, 1.0];
         const COMPACT_THRESHOLD = 0.25;
 
@@ -789,9 +800,13 @@
 
         /**
          * Pick a discrete scale that fits a natW x natH box into a
-         * tileW x tileH box. Returns one of TILE_SCALES, or null if the
-         * natural size doesn't fit at any scale ≥ COMPACT_THRESHOLD (caller
-         * should switch to compact mode).
+         * tileW x tileH box. Returns the largest value in TILE_SCALES
+         * that still fits, or null if nothing at or above
+         * COMPACT_THRESHOLD does (caller should switch to compact mode).
+         *
+         * Hysteresis is gone — with the step-1 windowed layout, tile
+         * sizes are stable across Refresh / resize events, so nothing
+         * oscillates between snap points.
          */
         function pickTermScale(tileW, tileH, natW, natH) {
             if (!(tileW > 0) || !(tileH > 0) || !(natW > 0) || !(natH > 0)) {
@@ -799,7 +814,6 @@
             }
             const raw = Math.min(tileW / natW, tileH / natH);
             if (raw < COMPACT_THRESHOLD) return null;
-            // Largest snap point that still fits.
             let chosen = TILE_SCALES[0];
             for (const s of TILE_SCALES) {
                 if (s <= raw) chosen = s;
@@ -807,17 +821,23 @@
             return chosen;
         }
 
-        /** Measure xterm's actual native pixel size from its DOM, if rendered. */
+        /**
+         * "Native" xterm dimensions used by the scale picker.
+         *
+         * Returns the per-agent measurement captured by initTerminal
+         * BEFORE any `.term-scale` transform was applied. That's the
+         * only safe reference — measuring a live (already-scaled) xterm
+         * creates a positive-feedback loop where each Refresh flips the
+         * tile between snap points (visually: "Open Code" → "Open C" →
+         * "Op"). Falls back to the rough constants if the agent entry
+         * is missing a measurement (shouldn't happen in practice).
+         */
         function nativeTermSize(agentId) {
-            const node = document.getElementById(`term-${agentId}`);
-            if (!node || !node.firstChild) {
-                return { w: TERM_NATIVE_W_DEFAULT, h: TERM_NATIVE_H_DEFAULT };
+            const a = agents.get(agentId);
+            if (a && a.nativeW && a.nativeH) {
+                return { w: a.nativeW, h: a.nativeH };
             }
-            const r = node.getBoundingClientRect();
-            // Fall back to the default if xterm hasn't measured yet (0x0).
-            const w = r.width > 0 ? r.width : TERM_NATIVE_W_DEFAULT;
-            const h = r.height > 0 ? r.height : TERM_NATIVE_H_DEFAULT;
-            return { w, h };
+            return { w: TERM_NATIVE_W_DEFAULT, h: TERM_NATIVE_H_DEFAULT };
         }
 
         /**
@@ -1067,9 +1087,25 @@
 
         // --- Layout state ---
 
-        const HEAT_SMOOTH_ALPHA = 0.3; // ~5s half-life at 1 Hz polling
-        const LAYOUT_REFRESH_MS = 1500;
+        const HEAT_SMOOTH_ALPHA = 0.15; // ~15s half-life at 1 Hz polling
+        const LAYOUT_REFRESH_MS = 3000;
         const LAYOUT_FREEZE_MS = 5000;
+        // Skip a re-layout if no agent's smoothed heat moved by more than
+        // this fraction since the last apply. Keeps the dashboard stable
+        // during demos when agents are mostly idle.
+        const LAYOUT_DIFF_THRESHOLD = 0.15;
+
+        // --- Debug tracing ---
+        // `window.atnDebug.trace()` turns on console logging for every
+        // layout apply / heat poll / tile-scale update so you can see
+        // exactly what's firing — useful when something looks jittery.
+        const atnDebug = {
+            traceOn: false,
+            trace(on = true) { this.traceOn = on; console.log(`atnDebug.trace: ${on}`); },
+            log(event, data) {
+                if (this.traceOn) console.debug(`[atn] ${event}`, data || '');
+            },
+        };
 
         // Focus-panel width fractions keyed by layoutState.focusSize:
         // [minFrac, maxFrac] of the total viewport width.
@@ -1084,12 +1120,15 @@
             smoothed: new Map(),
             enabled: false,
             pins: new Set(),
-            focusSize: 'medium', // 'medium' | 'large'
+            focusSize: 'medium', // 'medium' | 'large' (legacy — scale-UI)
             filterText: '',
             // Set of "transport:mosh", "role:worker", "state:error" etc.
             // Within a category chips OR; across categories they AND.
             filterChips: new Set(),
             groupBy: '', // '' | 'role' | 'project'
+            // Windowed UI saga (step 1): layout + sort modes.
+            layoutMode: 'tiled', // 'tiled' (step 1) | future 'stack' | 'carousel'
+            sortMode: 'name',    // 'name' (step 1) | future 'recent'
         };
 
         /** Returns true if agentId passes the current filter. Pinned agents
@@ -1146,6 +1185,11 @@
                     pins: Array.from(layoutState.pins),
                     focusId: layoutState.focusId,
                     focusSize: layoutState.focusSize,
+                    filterText: layoutState.filterText,
+                    filterChips: Array.from(layoutState.filterChips),
+                    groupBy: layoutState.groupBy,
+                    layoutMode: layoutState.layoutMode,
+                    sortMode: layoutState.sortMode,
                 });
                 localStorage.setItem(LAYOUT_PREFS_KEY, data);
             } catch (_) { /* localStorage unavailable or full — ignore */ }
@@ -1244,6 +1288,12 @@
                 if (data.groupBy === 'role' || data.groupBy === 'project') {
                     layoutState.groupBy = data.groupBy;
                 }
+                if (data.layoutMode === 'tiled' || data.layoutMode === 'stack' || data.layoutMode === 'carousel') {
+                    layoutState.layoutMode = data.layoutMode;
+                }
+                if (data.sortMode === 'name' || data.sortMode === 'recent') {
+                    layoutState.sortMode = data.sortMode;
+                }
             } catch (_) { /* malformed prefs — drop */ }
         }
 
@@ -1303,6 +1353,16 @@
             if (delBtn) delBtn.addEventListener('click', () => {
                 const sel = document.getElementById('saved-layouts');
                 if (sel && sel.value) deleteNamedLayout(sel.value);
+            });
+            const refreshBtn = document.getElementById('btn-refresh-layout');
+            if (refreshBtn) refreshBtn.addEventListener('click', () => {
+                const dashboard = document.getElementById('dashboard');
+                if (!dashboard || !layoutState.enabled) return;
+                atnDebug.log('refresh:manual', {});
+                applyLayout(computeLayout(dashboard));
+                _lastAppliedHeat = new Map(layoutState.smoothed);
+                refreshBtn.textContent = '↻ Refreshed';
+                setTimeout(() => { refreshBtn.textContent = '↻ Refresh'; }, 800);
             });
         }
 
@@ -1429,79 +1489,93 @@
             return (bestCoord || bestAny).id;
         }
 
+        function roleOf(id) {
+            const a = agents.get(id);
+            return (a?.info?.role
+                || a?.panel?.querySelector?.('.agent-role')?.textContent
+                || '').toLowerCase();
+        }
+
         function buildLayoutItems() {
-            // Floor so a zero-heat agent still has a visible tile area.
-            // Pinned agents live in the pin row and are excluded from the
-            // heat-sized treemap. Filtered-out agents also get hidden
-            // (matchesFilter returned false).
-            const FLOOR = 0.02;
-            const ids = Array.from(agents.keys()).filter(
-                (id) => !layoutState.pins.has(id) && matchesFilter(id),
-            );
-            return ids.map((id) => ({
-                id,
-                value: Math.max(FLOOR, layoutState.smoothed.get(id) ?? FLOOR),
-            }));
+            // Name-sorted, non-pinned, non-filtered agents. Coord promotion
+            // is done inside computeLayout so the sort is a stable default
+            // without special-casing here.
+            const ids = Array.from(agents.keys())
+                .filter((id) => !layoutState.pins.has(id) && matchesFilter(id));
+            ids.sort((a, b) => a.localeCompare(b));
+            return ids.map((id) => ({ id }));
+        }
+
+        // --- Windowed layout (saga: windowed-ui) ---
+        //
+        // Layout is mode-driven: the step-1 foundation supports `tiled`
+        // only. Later saga steps add stack + carousel. Coord is always
+        // placed prominently (left slice) regardless of sort order so the
+        // demo has a clear "primary window".
+
+        const COORD_FRAC = 0.55; // coord takes 55% of dashboard width
+        const TILE_GAP = 4;
+
+        function gridRects(rect, items) {
+            // Simple grid of equal cells. Picks cols×rows roughly matching
+            // the rect's aspect ratio. Small-N uses a single column so a
+            // vertically-tall sidebar doesn't produce micro-thin tiles.
+            if (items.length === 0) return [];
+            const aspect = rect.w / rect.h;
+            let cols = Math.max(1, Math.round(Math.sqrt(items.length * aspect)));
+            if (items.length <= 3 && aspect < 1.2) cols = 1;
+            const rows = Math.ceil(items.length / cols);
+            const cellW = Math.floor(rect.w / cols);
+            const cellH = Math.floor(rect.h / rows);
+            const out = [];
+            for (let i = 0; i < items.length; i++) {
+                const r = Math.floor(i / cols);
+                const c = i % cols;
+                out.push({
+                    id: items[i].id,
+                    x: rect.x + c * cellW,
+                    y: rect.y + r * cellH,
+                    w: Math.max(80, cellW - TILE_GAP),
+                    h: Math.max(80, cellH - TILE_GAP),
+                });
+            }
+            return out;
         }
 
         function computeLayout(container) {
             const items = buildLayoutItems();
-            if (items.length === 0) return { focus: null, tiles: [] };
-            if (layoutState.focusId && !agents.has(layoutState.focusId)) {
-                layoutState.focusId = null;
-            }
-            if (!layoutState.focusId) {
-                layoutState.focusId = autoPickFocus(items);
-            }
+            if (items.length === 0) return { windows: [] };
 
             const rect = {
                 x: 4,
                 y: 4,
-                w: Math.max(200, container.clientWidth - 8),
+                w: Math.max(240, container.clientWidth - 8),
                 h: Math.max(200, container.clientHeight - 8),
             };
 
-            const focusId = layoutState.focusId;
-            const focusItem = items.find((it) => it.id === focusId);
-            const rest = items.filter((it) => it.id !== focusId);
+            // First coordinator in name order is the prominent window.
+            const coordIdx = items.findIndex((it) => roleOf(it.id) === 'coordinator');
+            const coord = coordIdx >= 0 ? items[coordIdx] : null;
+            const workers = coord
+                ? items.filter((_, i) => i !== coordIdx)
+                : items.slice();
 
-            if (!focusItem) {
-                return { focus: null, tiles: squarify(rect, items) };
+            if (!coord && workers.length === 0) return { windows: [] };
+            if (!coord) return { windows: gridRects(rect, workers) };
+            if (workers.length === 0) {
+                return { windows: [{ id: coord.id, ...rect }] };
             }
 
-            if (rest.length === 0) {
-                return { focus: { id: focusId, ...rect }, tiles: [], groups: [] };
-            }
-
-            // Focus panel gets the left slice. Width scales with relative
-            // heat but clamps to the [min, max] range for the current
-            // focusSize ('medium' = narrower, 'large' = wider).
-            const total = items.reduce((a, b) => a + b.value, 0);
-            const [minFrac, maxFrac] = FOCUS_WIDTHS[layoutState.focusSize]
-                || FOCUS_WIDTHS.medium;
-            const focusFrac = Math.min(
-                maxFrac,
-                Math.max(minFrac, focusItem.value / total + 0.3),
-            );
-            const focusW = Math.floor(rect.w * focusFrac) - 4;
-            const focusRect = { x: rect.x, y: rect.y, w: focusW, h: rect.h };
-            const restRect = {
-                x: rect.x + focusW + 4,
+            // Coord on the left, workers gridded on the right.
+            const coordW = Math.floor(rect.w * COORD_FRAC) - TILE_GAP / 2;
+            const coordRect = { id: coord.id, x: rect.x, y: rect.y, w: coordW, h: rect.h };
+            const workerArea = {
+                x: rect.x + coordW + TILE_GAP,
                 y: rect.y,
-                w: rect.w - focusW - 4,
+                w: rect.w - coordW - TILE_GAP,
                 h: rect.h,
             };
-
-            // Group packing, if enabled: partition rest into group sub-rects
-            // proportional to each group's total heat, then squarify inside.
-            if (layoutState.groupBy) {
-                const groups = groupItems(rest, layoutState.groupBy);
-                const { tiles, bands } = groupedSquarify(restRect, groups);
-                return { focus: { id: focusId, ...focusRect }, tiles, groups: bands };
-            }
-
-            const tiles = squarify(restRect, rest);
-            return { focus: { id: focusId, ...focusRect }, tiles, groups: [] };
+            return { windows: [coordRect, ...gridRects(workerArea, workers)] };
         }
 
         /** Partition items by a group key drawn from agent meta. Returns an
@@ -1581,8 +1655,12 @@
         function applyLayout(layout) {
             const dashboard = document.getElementById('dashboard');
             if (!dashboard) return;
-            // Collect all mounted tile elements by agent id.
-            const place = (id, rect, isFocus) => {
+            const windows = layout.windows || [];
+            atnDebug.log('apply', {
+                count: windows.length,
+                ids: windows.map(w => `${w.id}(${Math.round(w.w)}x${Math.round(w.h)})`),
+            });
+            const place = (id, rect) => {
                 const el = document.getElementById(`panel-${id}`)
                     || document.getElementById(`compact-${id}`);
                 if (!el) return;
@@ -1590,15 +1668,15 @@
                 el.style.top = `${rect.y}px`;
                 el.style.width = `${rect.w}px`;
                 el.style.height = `${rect.h}px`;
+                // Clear the step-3 focus outline — step 2 of the windowed
+                // saga will add a proper .selected class instead.
                 if (el.classList.contains('agent-panel')) {
-                    el.classList.toggle('focus', !!isFocus);
+                    el.classList.remove('focus');
                 }
             };
-            // Clear any filtered-out tiles: hide mounted elements that no
-            // longer appear in the layout so old positions don't linger.
-            const visibleIds = new Set();
-            if (layout.focus) visibleIds.add(layout.focus.id);
-            for (const t of layout.tiles) visibleIds.add(t.id);
+            // Move any not-in-layout panels off-screen (pinned agents,
+            // filter misses — the pin row / future chrome shows them).
+            const visibleIds = new Set(windows.map(w => w.id));
             for (const id of agents.keys()) {
                 if (layoutState.pins.has(id)) continue;
                 if (visibleIds.has(id)) continue;
@@ -1611,42 +1689,53 @@
                     el.style.height = '0';
                 }
             }
-            if (layout.focus) {
-                ensureModeFor(layout.focus.id, layout.focus);
-                place(layout.focus.id, layout.focus, true);
+            for (const w of windows) {
+                ensureModeFor(w.id, w);
+                place(w.id, w);
             }
-            for (const t of layout.tiles) {
-                ensureModeFor(t.id, t);
-                place(t.id, t, false);
-            }
-            // Render / refresh group bands (overlays). Always rebuild; they're
-            // cheap, non-interactive divs.
+            // Step 1 has no group bands; clear any that may have been left
+            // over from a stale layout.
             dashboard.querySelectorAll('.group-band').forEach((b) => b.remove());
-            for (const band of (layout.groups || [])) {
-                const div = document.createElement('div');
-                div.className = 'group-band';
-                div.style.left = `${band.x}px`;
-                div.style.top = `${band.y}px`;
-                div.style.width = `${band.w}px`;
-                div.style.height = `${band.h}px`;
-                const label = document.createElement('span');
-                label.className = 'group-label';
-                label.textContent = band.key;
-                div.appendChild(label);
-                dashboard.appendChild(div);
-            }
             // Refresh the pin row so (filtered) labels update.
             syncPinFilteredLabels();
             // After positions change, update per-xterm scales.
             updateTileScales();
         }
 
+        // Snapshot of the last heat values we applied a layout from.
+        // Used to decide whether the next tick should re-layout at all.
+        let _lastAppliedHeat = new Map();
+
+        function heatDiffersSignificantly() {
+            const cur = layoutState.smoothed;
+            if (cur.size !== _lastAppliedHeat.size) return true;
+            for (const [id, v] of cur) {
+                const prev = _lastAppliedHeat.get(id);
+                if (prev === undefined) return true;
+                const base = Math.max(prev, 0.02);
+                if (Math.abs(v - prev) / base > LAYOUT_DIFF_THRESHOLD) return true;
+            }
+            return false;
+        }
+
         function treemapRefreshTick() {
             if (!layoutState.enabled) return;
-            if (Date.now() < layoutState.freezeUntil) return;
+            if (Date.now() < layoutState.freezeUntil) {
+                atnDebug.log('tick:skip', 'frozen');
+                return;
+            }
             const dashboard = document.getElementById('dashboard');
             if (!dashboard) return;
+            // Skip the re-layout when nothing has meaningfully shifted.
+            // Prevents the "tiles zooming in and out" feeling when agents
+            // are mostly idle and the smoothed heat just wobbles slightly.
+            if (!heatDiffersSignificantly()) {
+                atnDebug.log('tick:skip', 'heat-stable');
+                return;
+            }
+            atnDebug.log('tick:apply', { smoothed: Object.fromEntries(layoutState.smoothed) });
             applyLayout(computeLayout(dashboard));
+            _lastAppliedHeat = new Map(layoutState.smoothed);
         }
 
         function enableTreemapMode() {
@@ -1728,14 +1817,8 @@
             return panel;
         }
 
-        // Native xterm geometry. Every xterm renders at exactly these
-        // dimensions; tile size is decoupled via `.term-scale` CSS transform.
-        // Step 4 (treemap) respects these as the "crisp" size; when a tile
-        // is focused the scale is held at 1.0 and the PTY is resized to
-        // match. For every non-focused tile we never fit and never POST
-        // /api/agents/{id}/resize — layout churn is pure DOM.
-        const TERM_NATIVE_COLS = 120;
-        const TERM_NATIVE_ROWS = 40;
+        // TERM_NATIVE_COLS / TERM_NATIVE_ROWS are declared earlier in the
+        // script, before the scale picker that depends on them.
 
         function initTerminal(agentId) {
             const term = new Terminal({
@@ -1760,10 +1843,20 @@
 
             const container = document.getElementById(`term-${agentId}`);
             term.open(container);
+            // Measure xterm's actual unscaled pixel size RIGHT NOW, before
+            // any --term-k CSS variable is set on the wrapper. This is the
+            // native reference nativeTermSize() returns forever after, so
+            // the scale picker never sees a post-transform measurement
+            // (which would positive-feedback into "Open Code → Open C →
+            // Op" zoom oscillation on every Refresh).
+            const rect = container.getBoundingClientRect();
+            const nativeW = rect.width > 0 ? rect.width : TERM_NATIVE_W_DEFAULT;
+            const nativeH = rect.height > 0 ? rect.height : TERM_NATIVE_H_DEFAULT;
+
             // Tell the PTY about the native geometry exactly once. Subsequent
             // layout changes only update CSS scale (see updateTileScales).
             syncPtySize(agentId, term);
-            return { term, fitAddon };
+            return { term, fitAddon, nativeW, nativeH };
         }
 
         function syncPtySize(agentId, term) {
@@ -2032,8 +2125,8 @@
                 const panel = createAgentPanel(agent);
                 dashboard.appendChild(panel);
 
-                const { term, fitAddon } = initTerminal(agent.id);
-                agents.set(agent.id, { term, fitAddon, panel, evtSource: null });
+                const { term, fitAddon, nativeW, nativeH } = initTerminal(agent.id);
+                agents.set(agent.id, { term, fitAddon, panel, evtSource: null, nativeW, nativeH });
 
                 connectSSE(agent.id);
                 setupControls(agent.id);
@@ -2082,10 +2175,14 @@
                 enableTreemapMode();
             }
 
-            // Per-tick re-layout. Suspended while the freeze timer is
-            // running after a swap-to-focus so the user's click isn't
-            // immediately overwritten.
-            setInterval(treemapRefreshTick, LAYOUT_REFRESH_MS);
+            // Treemap layout is explicit-refresh only — the ↻ Refresh
+            // button in the filter bar recomputes on demand. Implicit
+            // re-layouts still fire on agent create/delete/focus-swap
+            // and on window / ResizeObserver resize so the dashboard
+            // stays usable; only the timer-driven drift is gone.
+            //
+            // Use `atnDebug.trace()` in devtools to log every layout
+            // event as it fires.
 
             // Expose dev toggles on window for devtools poking.
             window.toggleCompactMode = toggleCompactMode;
@@ -2096,6 +2193,7 @@
             window.enableTreemapMode = enableTreemapMode;
             window.togglePin = togglePin;
             window.saveLayoutPrefs = saveLayoutPrefs;
+            window.atnDebug = atnDebug;
         }
 
         init();
@@ -2106,6 +2204,10 @@
             const bar = document.getElementById('new-agent-bar');
             bar.classList.toggle('visible');
             if (bar.classList.contains('visible')) {
+                // Belt-and-suspenders: re-attach listeners in case the
+                // initial registration missed (can happen under some
+                // browser extensions / aggressive caching).
+                ensureNewAgentListeners();
                 updateTransportFields();
                 updateCommandPreview();
                 // Keyboard-first flow: focus the name field so the
@@ -2199,24 +2301,45 @@
             document.getElementById('new-agent-preview').textContent = previewCommand(spec);
             const missing = validateSpec(spec);
             const err = document.getElementById('new-agent-err');
-            err.textContent = missing.length ? `missing: ${missing.join(', ')}` : '';
+            // Only show a hint while typing; reserve the red "error" look
+            // for the moment the user clicks Create. Keeps the initial
+            // empty dialog from looking broken on open.
+            if (missing.length) {
+                err.textContent = `needs: ${missing.join(', ')}`;
+                err.style.color = '#888';
+            } else {
+                err.textContent = '';
+                err.style.color = '';
+            }
         }
 
-        ['new-name','new-role','new-transport','new-host','new-user','new-dir',
-         'new-project','new-agent-cli','new-agent-custom','new-agent-args'].forEach(id => {
-            document.addEventListener('DOMContentLoaded', () => {
+        // Register input listeners on the dialog fields. The inputs live
+        // in the body above this script, so they already exist by the time
+        // this runs — no need to gate on DOMContentLoaded. We also run this
+        // from toggleNewAgent as a belt-and-suspenders measure so the live
+        // preview + missing-field feedback always update while typing.
+        let _newAgentListenersAttached = false;
+        function ensureNewAgentListeners() {
+            if (_newAgentListenersAttached) return;
+            const ids = ['new-name','new-role','new-transport','new-host','new-user','new-dir',
+                         'new-project','new-agent-cli','new-agent-custom','new-agent-args'];
+            for (const id of ids) {
                 const el = document.getElementById(id);
-                if (el) el.addEventListener('input', updateCommandPreview);
-                if (el && el.tagName === 'SELECT') el.addEventListener('change', updateCommandPreview);
-            });
-        });
+                if (!el) continue;
+                el.addEventListener('input', updateCommandPreview);
+                if (el.tagName === 'SELECT') el.addEventListener('change', updateCommandPreview);
+            }
+            _newAgentListenersAttached = true;
+        }
+        ensureNewAgentListeners();
 
         async function createAgent() {
             const spec = readSpawnSpec();
             const missing = validateSpec(spec);
             if (missing.length) {
-                document.getElementById('new-agent-err').textContent =
-                    `missing: ${missing.join(', ')}`;
+                const err = document.getElementById('new-agent-err');
+                err.textContent = `missing: ${missing.join(', ')}`;
+                err.style.color = '#fca5a5';
                 return;
             }
             try {
@@ -2259,8 +2382,8 @@
             const panel = createAgentPanel(agent);
             dashboard.appendChild(panel);
 
-            const { term, fitAddon } = initTerminal(agent.id);
-            agents.set(agent.id, { term, fitAddon, panel, evtSource: null });
+            const { term, fitAddon, nativeW, nativeH } = initTerminal(agent.id);
+            agents.set(agent.id, { term, fitAddon, panel, evtSource: null, nativeW, nativeH });
             connectSSE(agent.id);
             setupControls(agent.id);
             refreshDashboardLayout();
