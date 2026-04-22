@@ -175,6 +175,30 @@
         .layout-btn:hover { color: #e0e0e0; }
         .layout-btn.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
 
+        /* Sparkline row — always-visible strip above the dashboard with one
+           cell per agent (flex 1/n). Click to focus. The pinned 📌 icon in
+           a cell indicates that window is locked-in-place on the dashboard. */
+        .sparkline-row { display: none; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #0f3460; background: #16213e; flex-shrink: 0; }
+        .sparkline-row.visible { display: flex; }
+        .spark-cell { flex: 1 1 0; min-width: 80px; height: 56px; border: 1px solid #0f3460; border-radius: 6px; background: #0d1117; padding: 4px 8px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; position: relative; }
+        .spark-cell:hover { border-color: #4ecca3; }
+        .spark-cell.selected { border-color: #4ecca3; }
+        .spark-cell.pinned { border-color: #fbbf24; }
+        .spark-cell .sc-head { display: flex; align-items: center; gap: 4px; font-size: 11px; min-width: 0; }
+        .spark-cell .sc-pin { color: #fbbf24; font-size: 10px; flex-shrink: 0; }
+        .spark-cell .sc-name { font-weight: 600; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+        .spark-cell .sc-role { font-size: 9px; color: #888; text-transform: uppercase; flex-shrink: 0; }
+        .spark-cell .sc-state { font-size: 9px; padding: 1px 4px; }
+        .spark-cell .sc-body { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; }
+        .spark-cell .sparkline { flex-shrink: 0; width: 48px; height: 16px; }
+        .spark-cell .sparkline path { fill: none; stroke: #4ecca3; stroke-width: 1.5; }
+        .spark-cell .sc-last { flex: 1; min-width: 0; font-family: monospace; font-size: 9px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Pinned (locked-in-place) windows float above normal tiles and
+           carry a subtle amber outline so they stand out. */
+        .dashboard .agent-panel.pinned,
+        .dashboard .agent-compact.pinned { outline: 2px solid #fbbf24; outline-offset: -2px; z-index: 10; }
+
         /* Carousel ◀/▶ cycle buttons — only shown when Carousel mode is active. */
         .carousel-nav { display: none; gap: 4px; margin-left: 4px; }
         .carousel-nav.visible { display: flex; }
@@ -457,7 +481,7 @@
             <button id="layout-delete" title="Delete selected layout">Delete</button>
         </span>
     </div>
-    <div class="pin-row" id="pin-row"></div>
+    <div class="sparkline-row" id="sparkline-row"></div>
     <div class="dashboard" id="dashboard"></div>
     <div class="window-dock" id="window-dock"></div>
     <div class="wiki-container" id="wiki-view" style="display:none;">
@@ -655,8 +679,8 @@
                     if (lastEl) lastEl.textContent = a.lastLine || ' ';
                 }
             }
-            // Pin cells show the same live data when the agent is pinned.
-            if (typeof refreshPinCell === 'function') refreshPinCell(agentId);
+            // Sparkline row mirrors live heat + last-line.
+            refreshSparklineCell(agentId);
         }
 
         // Manual toggle for developer testing before step 4 picks the mode
@@ -1388,6 +1412,15 @@
 
         function saveLayoutPrefs() {
             try {
+                // Serialize per-window state + pinned rect so lock-in-place
+                // survives a reload.
+                const windowsOut = {};
+                for (const [id, w] of Object.entries(layoutState.windows)) {
+                    windowsOut[id] = {
+                        state: w.state || 'normal',
+                        pinnedRect: w.pinnedRect || null,
+                    };
+                }
                 const data = JSON.stringify({
                     pins: Array.from(layoutState.pins),
                     focusId: layoutState.focusId,
@@ -1397,6 +1430,7 @@
                     groupBy: layoutState.groupBy,
                     layoutMode: layoutState.layoutMode,
                     sortMode: layoutState.sortMode,
+                    windows: windowsOut,
                 });
                 localStorage.setItem(LAYOUT_PREFS_KEY, data);
             } catch (_) { /* localStorage unavailable or full — ignore */ }
@@ -1453,7 +1487,7 @@
             });
             const gSel = document.getElementById('group-by');
             if (gSel) gSel.value = layoutState.groupBy;
-            renderPinRow();
+            renderSparklineRow();
             syncPinButtons();
             const dashboard = document.getElementById('dashboard');
             if (dashboard && layoutState.enabled) {
@@ -1500,6 +1534,22 @@
                 }
                 if (data.sortMode === 'name' || data.sortMode === 'recent') {
                     layoutState.sortMode = data.sortMode;
+                }
+                if (data.windows && typeof data.windows === 'object') {
+                    for (const [id, w] of Object.entries(data.windows)) {
+                        const state = (w && (w.state === 'minimized' || w.state === 'maximized'))
+                            ? w.state : 'normal';
+                        const pr = w && w.pinnedRect;
+                        const pinnedRect = (pr && typeof pr === 'object'
+                            && typeof pr.x === 'number' && typeof pr.y === 'number'
+                            && typeof pr.w === 'number' && typeof pr.h === 'number')
+                            ? { x: pr.x, y: pr.y, w: pr.w, h: pr.h } : undefined;
+                        layoutState.windows[id] = {
+                            state,
+                            pinned: layoutState.pins.has(id),
+                            ...(pinnedRect ? { pinnedRect } : {}),
+                        };
+                    }
                 }
             } catch (_) { /* malformed prefs — drop */ }
         }
@@ -1574,82 +1624,89 @@
         }
 
         function syncPinButtons() {
-            document.querySelectorAll('.btn-pin[data-pin-id]').forEach((btn) => {
-                const id = btn.getAttribute('data-pin-id');
-                btn.classList.toggle('pinned', layoutState.pins.has(id));
-                btn.title = layoutState.pins.has(id) ? 'Unpin' : 'Pin to always-visible row';
+            // Window-chrome 📌 buttons reflect locked state. The chrome
+            // layout emits `data-window-action="pin"`; we style those.
+            document.querySelectorAll('.btn-pin[data-window-action="pin"][data-window-id]').forEach((btn) => {
+                const id = btn.getAttribute('data-window-id');
+                const locked = layoutState.pins.has(id);
+                btn.classList.toggle('pinned', locked);
+                btn.title = locked ? 'Unpin (unlock position)' : 'Pin (lock in place)';
             });
         }
 
         function togglePin(agentId) {
+            const w = ensureWindow(agentId);
             if (layoutState.pins.has(agentId)) {
+                // Unlock: drop the stored rect; next layout places it normally.
                 layoutState.pins.delete(agentId);
+                delete w.pinnedRect;
             } else {
-                if (layoutState.pins.size >= PINS_MAX) {
-                    console.warn(`pin limit reached (${PINS_MAX}); unpin something first`);
-                    return;
+                // Lock in place: snapshot current rect from the DOM.
+                const el = document.getElementById(`panel-${agentId}`)
+                    || document.getElementById(`compact-${agentId}`);
+                if (el) {
+                    const x = parseInt(el.style.left, 10) || 0;
+                    const y = parseInt(el.style.top, 10) || 0;
+                    const width = el.offsetWidth || 240;
+                    const height = el.offsetHeight || 160;
+                    w.pinnedRect = { x, y, w: width, h: height };
                 }
                 layoutState.pins.add(agentId);
-                // Pinning the current focus gives focus back to auto-pick.
-                if (layoutState.focusId === agentId) {
-                    layoutState.focusId = null;
-                }
             }
             saveLayoutPrefs();
-            renderPinRow();
+            renderSparklineRow();
             syncPinButtons();
-            const dashboard = document.getElementById('dashboard');
-            if (dashboard && layoutState.enabled) {
-                applyLayout(computeLayout(dashboard));
-            }
+            applyLayoutFresh();
         }
 
-        function renderPinRow() {
-            const row = document.getElementById('pin-row');
+        function renderSparklineRow() {
+            // One flex-1 cell per agent (≈1/n of row width). Always visible
+            // while any agents exist. Click → focus/select that window.
+            const row = document.getElementById('sparkline-row');
             if (!row) return;
             row.innerHTML = '';
-            const anyPins = layoutState.pins.size > 0;
-            row.classList.toggle('visible', anyPins);
-            for (const id of layoutState.pins) {
-                if (!agents.has(id)) continue;
-                const cell = document.createElement('div');
-                cell.className = 'pin-cell';
-                cell.dataset.agentId = id;
+            const ids = Array.from(agents.keys()).sort((a, b) => a.localeCompare(b));
+            row.classList.toggle('visible', ids.length > 0);
+            for (const id of ids) {
                 const a = agents.get(id);
-                const name = a?.panel?.querySelector?.('.agent-name')?.textContent || id;
-                const role = a?.panel?.querySelector?.('.agent-role')?.textContent || 'agent';
-                const stateLabelTxt = a?.panel?.querySelector?.('.state-badge')?.textContent || 'Idle';
-                const stateCls = a?.panel?.querySelector?.('.state-badge')?.className || 'state-badge state-idle';
+                if (!a) continue;
+                const info = a.info || {};
+                const stateObj = info.state || { state: 'idle' };
+                const sk = stateKey(stateObj);
+                const nameTxt = a.panel?.querySelector?.('.agent-name')?.textContent || id;
+                const roleTxt = a.panel?.querySelector?.('.agent-role')?.textContent || '';
+                const isPinned = layoutState.pins.has(id);
+                const isSelected = layoutState.selectedId === id;
+                const classes = ['spark-cell'];
+                if (isPinned) classes.push('pinned');
+                if (isSelected) classes.push('selected');
+                const cell = document.createElement('div');
+                cell.className = classes.join(' ');
+                cell.dataset.agentId = id;
+                cell.title = nameTxt;
                 cell.innerHTML = `
-                    <button class="pin-unpin" title="Unpin" data-unpin-id="${id}">×</button>
-                    <div class="pin-head">
-                        <span class="pin-icon">📌</span>
-                        <span class="pin-name" title="${name}">${name}</span>
-                        <span class="${stateCls} pin-state">${stateLabelTxt}</span>
+                    <div class="sc-head">
+                        ${isPinned ? '<span class="sc-pin" title="Pinned">📌</span>' : ''}
+                        <span class="sc-name">${escapeHTML(nameTxt)}</span>
+                        <span class="sc-role">${escapeHTML(roleTxt)}</span>
+                        <span class="state-badge state-${sk} sc-state">${stateLabel(stateObj)}</span>
                     </div>
-                    <div class="pin-body">
-                        <svg class="sparkline" viewBox="0 0 44 14" preserveAspectRatio="none">
-                            <path d="" id="pin-spark-${id}"></path>
+                    <div class="sc-body">
+                        <svg class="sparkline" viewBox="0 0 48 16" preserveAspectRatio="none">
+                            <path d="" id="spark-path-${id}"></path>
                         </svg>
-                        <span class="pin-lastline" id="pin-lastline-${id}">&nbsp;</span>
+                        <span class="sc-last" id="spark-last-${id}">&nbsp;</span>
                     </div>
                 `;
-                cell.addEventListener('click', (e) => {
-                    // Clicking the × unpins; clicking elsewhere focuses.
-                    if (e.target.closest('[data-unpin-id]')) {
-                        togglePin(id);
-                        e.stopPropagation();
-                        return;
-                    }
+                cell.addEventListener('click', () => {
                     document.dispatchEvent(new CustomEvent('swap-to-focus', {
                         detail: { agentId: id },
                     }));
                 });
                 row.appendChild(cell);
-                // Seed sparkline + last-line from current state.
-                const path = cell.querySelector(`#pin-spark-${id}`);
-                if (path) path.setAttribute('d', sparklinePath(a.heatRing, 44, 14));
-                const ll = cell.querySelector(`#pin-lastline-${id}`);
+                const path = cell.querySelector(`#spark-path-${id}`);
+                if (path) path.setAttribute('d', sparklinePath(a.heatRing, 48, 16));
+                const ll = cell.querySelector(`#spark-last-${id}`);
                 if (ll) ll.textContent = a.lastLine || ' ';
             }
         }
@@ -1690,21 +1747,14 @@
                 .replace(/"/g, '&quot;');
         }
 
-        function syncPinFilteredLabels() {
-            document.querySelectorAll('.pin-cell[data-agent-id]').forEach((cell) => {
-                const id = cell.getAttribute('data-agent-id');
-                cell.classList.toggle('filtered', !matchesFilter(id));
-            });
-        }
-
-        function refreshPinCell(agentId) {
-            const cell = document.querySelector(`.pin-cell[data-agent-id="${agentId}"]`);
+        function refreshSparklineCell(agentId) {
+            const cell = document.querySelector(`.spark-cell[data-agent-id="${agentId}"]`);
             if (!cell) return;
             const a = agents.get(agentId);
             if (!a) return;
-            const path = cell.querySelector(`#pin-spark-${agentId}`);
-            if (path) path.setAttribute('d', sparklinePath(a.heatRing, 44, 14));
-            const ll = cell.querySelector(`#pin-lastline-${agentId}`);
+            const path = cell.querySelector(`#spark-path-${agentId}`);
+            if (path) path.setAttribute('d', sparklinePath(a.heatRing, 48, 16));
+            const ll = cell.querySelector(`#spark-last-${agentId}`);
             if (ll) ll.textContent = a.lastLine || ' ';
         }
 
@@ -2142,12 +2192,13 @@
                     el.classList.remove('focus');
                 }
             };
-            // Move any not-in-layout panels off-screen (pinned agents,
-            // filter misses, minimized agents — the dock shows those).
+            // Move any not-in-layout panels off-screen (filter misses,
+            // minimized agents — the dock shows those). Pinned windows
+            // are placed below at their stored rect.
             const visibleIds = new Set(windows.map(w => w.id));
+            const pinnedIds = new Set(layoutState.pins);
             for (const id of agents.keys()) {
-                if (layoutState.pins.has(id)) continue;
-                if (visibleIds.has(id)) continue;
+                if (visibleIds.has(id) || pinnedIds.has(id)) continue;
                 const el = document.getElementById(`panel-${id}`)
                     || document.getElementById(`compact-${id}`);
                 if (el) {
@@ -2155,11 +2206,39 @@
                     el.style.top = '-9999px';
                     el.style.width = '0';
                     el.style.height = '0';
+                    el.classList.remove('pinned');
+                    el.style.zIndex = '';
                 }
             }
             for (const w of windows) {
+                // Pinned overrides come below; skip placing here so we
+                // don't double-position if the same id appears in both.
+                if (pinnedIds.has(w.id)) continue;
                 ensureModeFor(w.id, w);
                 place(w.id, w);
+                const el = document.getElementById(`panel-${w.id}`)
+                    || document.getElementById(`compact-${w.id}`);
+                if (el) {
+                    el.classList.remove('pinned');
+                    el.style.zIndex = '';
+                }
+            }
+            // Pinned = locked in place. Place at the stored rect, above
+            // normal tiles, regardless of which mode is active.
+            for (const id of pinnedIds) {
+                if (!agents.has(id)) continue;
+                const wdef = layoutState.windows[id];
+                const pr = wdef && wdef.pinnedRect;
+                if (!pr) continue;
+                const rect = { id, x: pr.x, y: pr.y, w: pr.w, h: pr.h };
+                ensureModeFor(id, rect);
+                place(id, rect);
+                const el = document.getElementById(`panel-${id}`)
+                    || document.getElementById(`compact-${id}`);
+                if (el) {
+                    el.classList.add('pinned');
+                    el.style.zIndex = '10';
+                }
             }
             // Selected outline follows state.
             document.querySelectorAll('.agent-panel.selected').forEach(el => el.classList.remove('selected'));
@@ -2175,8 +2254,6 @@
             // over from a stale layout.
             dashboard.querySelectorAll('.group-band').forEach((b) => b.remove());
             renderWindowDock(minimized);
-            // Refresh the pin row so (filtered) labels update.
-            syncPinFilteredLabels();
             // After positions change, update per-xterm scales.
             updateTileScales();
         }
@@ -2396,16 +2473,14 @@
             function doSend() {
                 const text = input.value;
                 if (text) {
-                    // Send text, then Enter as separate raw bytes after a
-                    // short delay so TUI apps exit bracketed paste mode first.
+                    // Send text + Enter as a single atomic POST. Splitting
+                    // them into two requests introduced a race: rapid typing
+                    // could queue a second text POST before the first Enter
+                    // landed, producing mashed output like "pwdpwdbash".
                     fetch(`${API_BASE}/api/agents/${agentId}/input`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text }),
-                    }).then(() => {
-                        setTimeout(() => {
-                            sendRawBytes(agentId, [13]); // \r = Enter
-                        }, 100);
+                        body: JSON.stringify({ text: text + '\r' }),
                     });
                     input.value = '';
                 }
@@ -2642,7 +2717,7 @@
             // group-by) before the first layout so they're honored on the
             // very first render.
             loadLayoutPrefs();
-            renderPinRow();
+            renderSparklineRow();
             syncPinButtons();
 
             // Wire the filter bar.
