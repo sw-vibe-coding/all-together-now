@@ -199,6 +199,17 @@
         .dashboard .agent-panel.pinned,
         .dashboard .agent-compact.pinned { outline: 2px solid #fbbf24; outline-offset: -2px; z-index: 10; }
 
+        /* Keyboard hint — muted text in the top bar listing the bare-key
+           bindings. Visible at all times; step 6 may make it dismissible. */
+        .kbd-hint { font-size: 11px; color: #6b7280; margin-left: 8px; font-family: system-ui, sans-serif; }
+        .kbd-hint .kbd { color: #9ca3af; font-family: 'JetBrains Mono', monospace; }
+
+        /* PTY-focus badge — appears near the Send button when focus is
+           inside that panel's xterm, signaling that keystrokes go to the
+           PTY instead of to the window-management keyboard layer. */
+        .pty-focus-badge { display: none; font-size: 10px; color: #fbbf24; padding: 2px 6px; border: 1px solid #fbbf24; border-radius: 10px; margin-right: 4px; white-space: nowrap; }
+        .agent-panel.pty-focused .pty-focus-badge { display: inline-block; }
+
         /* Carousel ◀/▶ cycle buttons — only shown when Carousel mode is active. */
         .carousel-nav { display: none; gap: 4px; margin-left: 4px; }
         .carousel-nav.visible { display: flex; }
@@ -390,6 +401,7 @@
             <button class="carousel-btn" data-carousel="prev" title="Previous (←)">◀</button>
             <button class="carousel-btn" data-carousel="next" title="Next (→)">▶</button>
         </div>
+        <span class="kbd-hint" id="kbd-hint">click header to select · <span class="kbd">m</span> min · <span class="kbd">M</span> max · <span class="kbd">p</span> pin · <span class="kbd">←/→</span> cycle · <span class="kbd">1..9</span> jump · <span class="kbd">Esc</span> clear</span>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
             <button class="view-tab" id="tab-graph" onclick="switchView('graph')">Graph</button>
@@ -854,17 +866,16 @@
             }
         });
 
-        // --- Keyboard shortcuts ---
+        // --- Keyboard shortcuts (Option C — click-to-select, no mode) ---
         //
-        // 1..9  focus Nth hottest (unpinned) agent
-        // 0     focus coordinator if one exists
-        // f     toggle focus panel width (medium ↔ large)
-        // p     pin/unpin the currently focused agent
-        // /     step 6 hook — focuses the filter input when it exists
-        // Esc   clear explicit focus; auto-pick takes over
-        //
-        // Ignores events when the user is typing into an input, textarea,
-        // select, or anything inside an xterm (contenteditable via xterm).
+        // Bindings fire only when no input/textarea/select/xterm has focus:
+        //   m       minimize selected
+        //   M       maximize / restore toggle on selected
+        //   p       pin / unpin selected (lock in place)
+        //   ← / →   cycle focus prev / next by sort order
+        //   1..9    jump to Nth window by sort order
+        //   /       focus the filter input (convenience)
+        //   Esc     deselect + restore any maximized window
 
         function isTypingTarget(t) {
             if (!t) return false;
@@ -875,83 +886,125 @@
             return false;
         }
 
-        function hottestUnpinned(n) {
-            return buildLayoutItems()
-                .sort((a, b) => b.value - a.value)
-                .slice(0, n);
+        function isXtermFocused() {
+            const el = document.activeElement;
+            return !!(el && el.closest && el.closest('.xterm'));
+        }
+
+        function keyboardCycleItems() {
+            // Sort-order list of focus candidates. Excludes minimized windows
+            // (both regular and pinned-minimized) so cycling doesn't jump to
+            // something invisible. Pinned-normal agents stay in the cycle.
+            return Array.from(agents.keys())
+                .filter((id) => matchesFilter(id) && windowState(id) !== 'minimized')
+                .sort((a, b) => a.localeCompare(b));
+        }
+
+        function keyboardJump(n) {
+            const items = keyboardCycleItems();
+            if (items.length < n) return false;
+            windowSelect(items[n - 1]);
+            return true;
+        }
+
+        function keyboardCycle(delta) {
+            const items = keyboardCycleItems();
+            if (items.length === 0) return;
+            let idx = items.indexOf(layoutState.selectedId);
+            if (idx < 0) {
+                // Nothing selected — land on the first (or last if going prev).
+                idx = delta > 0 ? -1 : 0;
+            }
+            const next = ((idx + delta) % items.length + items.length) % items.length;
+            windowSelect(items[next]);
         }
 
         document.addEventListener('keydown', (e) => {
             if (isTypingTarget(e.target)) return;
+            if (isXtermFocused()) return;
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             const k = e.key;
+            const sel = layoutState.selectedId;
 
             if (k >= '1' && k <= '9') {
-                const n = parseInt(k, 10);
-                const hot = hottestUnpinned(n);
-                if (hot.length >= n) {
-                    e.preventDefault();
-                    document.dispatchEvent(new CustomEvent('swap-to-focus', {
-                        detail: { agentId: hot[n - 1].id },
-                    }));
-                }
+                if (keyboardJump(parseInt(k, 10))) e.preventDefault();
                 return;
             }
-            if (k === '0') {
-                const coord = Array.from(agents.entries()).find(([id, a]) => {
-                    if (layoutState.pins.has(id)) return false;
-                    const role = a?.panel?.querySelector?.('.agent-role')?.textContent?.toLowerCase() || '';
-                    return role === 'coordinator';
-                });
-                if (coord) {
-                    e.preventDefault();
-                    document.dispatchEvent(new CustomEvent('swap-to-focus', {
-                        detail: { agentId: coord[0] },
-                    }));
-                }
-                return;
-            }
-            if (k === 'f') {
+            if (k === 'ArrowLeft') {
                 e.preventDefault();
-                layoutState.focusSize = layoutState.focusSize === 'medium' ? 'large' : 'medium';
-                saveLayoutPrefs();
-                const dashboard = document.getElementById('dashboard');
-                if (dashboard && layoutState.enabled) {
-                    applyLayout(computeLayout(dashboard));
+                keyboardCycle(-1);
+                return;
+            }
+            if (k === 'ArrowRight') {
+                e.preventDefault();
+                keyboardCycle(1);
+                return;
+            }
+            if (k === 'm') {
+                if (sel && agents.has(sel)) {
+                    e.preventDefault();
+                    windowMinimize(sel);
+                }
+                return;
+            }
+            if (k === 'M') {
+                if (sel && agents.has(sel)) {
+                    e.preventDefault();
+                    windowMaximizeToggle(sel);
                 }
                 return;
             }
             if (k === 'p') {
-                if (layoutState.focusId) {
+                if (sel && agents.has(sel)) {
                     e.preventDefault();
-                    togglePin(layoutState.focusId);
+                    togglePin(sel);
                 }
                 return;
             }
             if (k === '/') {
-                // Step 6 will wire a real filter input. For now, focus
-                // whatever `#filter-input` exists or just log.
                 const input = document.getElementById('filter-input');
                 if (input) {
                     e.preventDefault();
                     input.focus();
-                } else {
-                    console.log('filter input not yet available (step 6)');
                 }
                 return;
             }
             if (k === 'Escape') {
-                if (layoutState.focusId !== null) {
-                    e.preventDefault();
-                    layoutState.focusId = null;
-                    saveLayoutPrefs();
-                    const dashboard = document.getElementById('dashboard');
-                    if (dashboard && layoutState.enabled) {
-                        applyLayout(computeLayout(dashboard));
-                    }
+                e.preventDefault();
+                // Restore any maximized window first; second Esc deselects.
+                const maxedId = hasMaximized();
+                if (maxedId) {
+                    windowRestore(maxedId);
+                    return;
+                }
+                if (layoutState.selectedId !== null) {
+                    windowSelect(null);
                 }
                 return;
             }
+        });
+
+        // Track when focus lands inside a panel's xterm so the UI can flip
+        // the `pty-focused` class (which reveals the "typing to PTY" badge
+        // and signals that keys bypass the window-management layer).
+        document.addEventListener('focusin', (e) => {
+            const panel = e.target && e.target.closest && e.target.closest('.agent-panel');
+            const inXterm = e.target && e.target.closest && e.target.closest('.xterm');
+            document.querySelectorAll('.agent-panel.pty-focused').forEach((p) => {
+                if (p !== panel || !inXterm) p.classList.remove('pty-focused');
+            });
+            if (panel && inXterm) panel.classList.add('pty-focused');
+        });
+        document.addEventListener('focusout', (e) => {
+            const panel = e.target && e.target.closest && e.target.closest('.agent-panel');
+            if (!panel) return;
+            // Defer so focus can settle on the next target before we clear.
+            setTimeout(() => {
+                const active = document.activeElement;
+                if (!active || !active.closest || !active.closest('.xterm')) {
+                    panel.classList.remove('pty-focused');
+                }
+            }, 0);
         });
 
         // swap-to-focus: promote the clicked tile to the focus panel.
@@ -2365,6 +2418,7 @@
                 </div>
                 <div class="agent-controls">
                     <input type="text" id="input-${agent.id}" placeholder="Command for ${agent.name}...">
+                    <span class="pty-focus-badge" title="Keyboard is routed to this PTY. Click outside the terminal or press Esc to return to window-management keys.">typing to PTY</span>
                     <button class="btn-send" data-agent="${agent.id}">Send</button>
                     <button class="btn-ctrl-c" data-agent="${agent.id}">^C</button>
                     <button class="btn-restart" data-agent="${agent.id}" title="Graceful shutdown (Ctrl-C x2) and respawn">Restart</button>
