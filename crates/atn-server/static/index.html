@@ -168,12 +168,18 @@
         .view-tab.active { background: #0f3460; color: #e0e0e0; }
         .view-tab:hover { color: #e0e0e0; }
 
-        /* Layout selector — Tiled / Stack toggle in the top bar. */
+        /* Layout selector — Tiled / Stack / Carousel toggle in the top bar. */
         .layout-selector { display: flex; gap: 4px; margin-left: 8px; }
         .layout-selector .layout-label { font-size: 11px; color: #888; align-self: center; margin-right: 2px; }
         .layout-btn { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
         .layout-btn:hover { color: #e0e0e0; }
         .layout-btn.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
+
+        /* Carousel ◀/▶ cycle buttons — only shown when Carousel mode is active. */
+        .carousel-nav { display: none; gap: 4px; margin-left: 4px; }
+        .carousel-nav.visible { display: flex; }
+        .carousel-btn { padding: 3px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #4ecca3; cursor: pointer; font-size: 14px; line-height: 1; min-width: 28px; }
+        .carousel-btn:hover { background: #0f3460; }
 
         /* Wiki browser */
         .wiki-container { flex: 1; display: flex; min-height: 0; overflow: hidden; }
@@ -354,6 +360,11 @@
             <span class="layout-label">layout</span>
             <button class="layout-btn active" data-layout="tiled">Tiled</button>
             <button class="layout-btn" data-layout="stack">Stack</button>
+            <button class="layout-btn" data-layout="carousel">Carousel</button>
+        </div>
+        <div class="carousel-nav" id="carousel-nav" title="Cycle carousel focus">
+            <button class="carousel-btn" data-carousel="prev" title="Previous (←)">◀</button>
+            <button class="carousel-btn" data-carousel="next" title="Next (→)">▶</button>
         </div>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
@@ -695,6 +706,11 @@
                 // Selected tile gets a crisp xterm at its real size.
                 fitSelectedTerm(id);
             }
+            // Carousel centers the selected window — re-layout so the
+            // clicked peek snaps to the primary slot.
+            if (layoutState.layoutMode === 'carousel') {
+                applyLayoutFresh();
+            }
         }
 
         function fitSelectedTerm(id) {
@@ -770,13 +786,19 @@
         // Single delegated click listener for everything inside an
         // agent panel's header: icon buttons + header body click.
         document.addEventListener('click', (e) => {
-            // Dock cell clicks restore the agent — or, in Stack mode,
-            // swap it into the primary slot.
+            // Dock cell clicks restore the agent. Stack: swap into the
+            // primary slot. Carousel: restore + focus so it lands as the
+            // centered primary next render.
             const dockCell = e.target.closest('.dock-cell[data-window-id]');
             if (dockCell) {
                 const id = dockCell.getAttribute('data-window-id');
                 if (layoutState.layoutMode === 'stack') {
                     stackPromote(id);
+                } else if (layoutState.layoutMode === 'carousel') {
+                    ensureWindow(id).state = 'normal';
+                    layoutState.selectedId = id;
+                    saveLayoutPrefs();
+                    applyLayoutFresh();
                 } else {
                     windowRestore(id);
                 }
@@ -915,6 +937,10 @@
             const id = e.detail && e.detail.agentId;
             if (!id || !agents.has(id)) return;
             layoutState.focusId = id;
+            // Click-to-select for compact-tile paths (peeks in carousel,
+            // compact tiles in stack/tiled). Headers already set this via
+            // windowSelect; this mirrors it for tiles without a header.
+            layoutState.selectedId = id;
             layoutState.freezeUntil = Date.now() + LAYOUT_FREEZE_MS;
             saveLayoutPrefs();
             const dashboard = document.getElementById('dashboard');
@@ -1779,17 +1805,30 @@
         }
 
         function setLayoutMode(mode) {
-            if (mode !== 'tiled' && mode !== 'stack') return;
+            if (mode !== 'tiled' && mode !== 'stack' && mode !== 'carousel') return;
             const prev = layoutState.layoutMode;
             if (prev === mode) return;
+            // Leaving stack restores minimized windows to normal so the
+            // next mode doesn't see lingering stack state.
+            if (prev === 'stack' && mode !== 'stack') {
+                leaveStackMode();
+            }
+            // Entering stack reconciles to one-primary-plus-minimized.
             if (mode === 'stack') {
                 enterStackMode();
-            } else if (prev === 'stack') {
-                leaveStackMode();
+            }
+            // Maximized is a tiled-mode affordance; short-circuiting it on a
+            // mode change keeps the stack/carousel math uncomplicated. We
+            // preserve user-driven minimized state so dock survives the switch.
+            for (const id of Object.keys(layoutState.windows)) {
+                if (layoutState.windows[id].state === 'maximized') {
+                    layoutState.windows[id].state = 'normal';
+                }
             }
             layoutState.layoutMode = mode;
             saveLayoutPrefs();
             updateLayoutSelector();
+            updateCarouselNav();
             applyLayoutFresh();
         }
 
@@ -1799,11 +1838,42 @@
             });
         }
 
+        function updateCarouselNav() {
+            const nav = document.getElementById('carousel-nav');
+            if (nav) nav.classList.toggle('visible', layoutState.layoutMode === 'carousel');
+        }
+
+        function carouselCycle(delta) {
+            // Advance (or retreat) focus through the name-ordered pool of
+            // non-pinned / non-filtered / non-minimized agents. Wraps.
+            const all = buildLayoutItems();
+            const eligible = all.filter((it) => windowState(it.id) !== 'minimized');
+            if (eligible.length === 0) return;
+            let idx = -1;
+            if (layoutState.selectedId) {
+                idx = eligible.findIndex((it) => it.id === layoutState.selectedId);
+            }
+            if (idx < 0) {
+                const coord = eligible.findIndex((it) => roleOf(it.id) === 'coordinator');
+                idx = coord >= 0 ? coord : 0;
+            }
+            const n = eligible.length;
+            const nextIdx = ((idx + delta) % n + n) % n;
+            layoutState.selectedId = eligible[nextIdx].id;
+            saveLayoutPrefs();
+            applyLayoutFresh();
+        }
+
         function setupLayoutSelector() {
             document.querySelectorAll('.layout-btn[data-layout]').forEach((btn) => {
                 btn.addEventListener('click', () => setLayoutMode(btn.dataset.layout));
             });
+            document.querySelectorAll('.carousel-btn[data-carousel]').forEach((btn) => {
+                const dir = btn.dataset.carousel === 'next' ? 1 : -1;
+                btn.addEventListener('click', () => carouselCycle(dir));
+            });
             updateLayoutSelector();
+            updateCarouselNav();
         }
 
         // --- Windowed layout (saga: windowed-ui) ---
@@ -1871,6 +1941,62 @@
                 };
                 const implicitDock = all.filter((it) => it.id !== maxed.id);
                 return { windows: [maxRect], minimized: implicitDock };
+            }
+
+            // Carousel mode: one focused window centered at ~80% of
+            // viewport + a prev/next peek on either side (~9% each).
+            // Name-order cycle; wraps at the ends. Manually-minimized
+            // agents are excluded from the cycle and fall through to the
+            // bottom dock (deliverable 5 of step 4).
+            if (layoutState.layoutMode === 'carousel') {
+                const eligible = all.filter((it) => windowState(it.id) !== 'minimized');
+                const dockItems = all.filter((it) => windowState(it.id) === 'minimized');
+                if (eligible.length === 0) return { windows: [], minimized: dockItems };
+                const n = eligible.length;
+                let focusIdx = -1;
+                if (layoutState.selectedId) {
+                    focusIdx = eligible.findIndex((it) => it.id === layoutState.selectedId);
+                }
+                if (focusIdx < 0) {
+                    focusIdx = eligible.findIndex((it) => roleOf(it.id) === 'coordinator');
+                }
+                if (focusIdx < 0) focusIdx = 0;
+                const focused = eligible[focusIdx];
+                const prev = n > 1 ? eligible[(focusIdx - 1 + n) % n] : null;
+                const next = n > 1 && n > 2 ? eligible[(focusIdx + 1) % n] : null;
+                // n=2: prev === next (same agent); render one peek on the
+                // right to avoid doubling the same tile.
+                const PEEK_FRAC = 0.09;
+                const peekW = Math.floor(rect.w * PEEK_FRAC);
+                const peekGap = 8;
+                const primaryW = rect.w - 2 * (peekW + peekGap);
+                const primaryH = Math.floor(rect.h * 0.9);
+                const peekH = Math.floor(rect.h * 0.7);
+                const primaryRect = {
+                    id: focused.id,
+                    x: rect.x + peekW + peekGap,
+                    y: rect.y + Math.floor((rect.h - primaryH) / 2),
+                    w: primaryW, h: primaryH,
+                };
+                const windows = [primaryRect];
+                const peekY = rect.y + Math.floor((rect.h - peekH) / 2);
+                if (prev && prev.id !== focused.id) {
+                    windows.push({
+                        id: prev.id,
+                        x: rect.x,
+                        y: peekY,
+                        w: peekW, h: peekH,
+                    });
+                }
+                if (next && next.id !== focused.id && (!prev || next.id !== prev.id)) {
+                    windows.push({
+                        id: next.id,
+                        x: rect.x + rect.w - peekW,
+                        y: peekY,
+                        w: peekW, h: peekH,
+                    });
+                }
+                return { windows, minimized: dockItems };
             }
 
             // Stack mode: one primary window at ~80% viewport + everything
