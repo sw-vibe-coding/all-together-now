@@ -341,12 +341,14 @@
                 </select>
             </div>
             <div class="field-row">
-                <span class="field-label">user</span>
-                <input class="field-user" id="new-user" placeholder="devh1" disabled>
-                <span class="field-label">@</span>
-                <input class="field-host" id="new-host" placeholder="queenbee" disabled>
+                <span class="remote-only" id="new-remote-only" style="display:none;">
+                    <span class="field-label">user</span>
+                    <input class="field-user" id="new-user" placeholder="devh1">
+                    <span class="field-label">@</span>
+                    <input class="field-host" id="new-host" placeholder="queenbee">
+                </span>
                 <span class="field-label">dir</span>
-                <input class="field-dir" id="new-dir" placeholder="/home/devh1/work/hlasm">
+                <input class="field-dir" id="new-dir" placeholder="/path/to/project (or . for current)">
                 <span class="field-label">project</span>
                 <input class="field-project" id="new-project" placeholder="(optional label)">
             </div>
@@ -2106,17 +2108,37 @@
             if (bar.classList.contains('visible')) {
                 updateTransportFields();
                 updateCommandPreview();
+                // Keyboard-first flow: focus the name field so the
+                // demo operator can start typing immediately.
+                const nameEl = document.getElementById('new-name');
+                if (nameEl) nameEl.focus();
             }
         }
+
+        // Remembers the last mosh/ssh host the user typed so subsequent
+        // worker-creates don't have to re-type it. Only the host — user
+        // (and everything else) is expected to differ per worker.
+        const LAST_HOST_KEY = 'atn-last-host';
 
         function updateTransportFields() {
             const transport = document.getElementById('new-transport').value;
             const remote = transport !== 'local';
-            document.getElementById('new-user').disabled = !remote;
-            document.getElementById('new-host').disabled = !remote;
+            const remoteGroup = document.getElementById('new-remote-only');
+            if (remoteGroup) remoteGroup.style.display = remote ? '' : 'none';
             if (!remote) {
+                // Local agents have no user/host — clear so nothing leaks
+                // into the composed command preview.
                 document.getElementById('new-user').value = '';
                 document.getElementById('new-host').value = '';
+            } else {
+                // Pre-fill host from the most recently used one if the
+                // field is empty. Keeps the "many workers on one host"
+                // flow fast.
+                try {
+                    const last = localStorage.getItem(LAST_HOST_KEY);
+                    const hostEl = document.getElementById('new-host');
+                    if (last && hostEl && !hostEl.value) hostEl.value = last;
+                } catch (_) { /* ignore */ }
             }
             updateCommandPreview();
         }
@@ -2134,10 +2156,14 @@
             const workingDir = document.getElementById('new-dir').value.trim();
             const project = document.getElementById('new-project').value.trim();
             const agentArgs = document.getElementById('new-agent-args').value.trim();
+            // Local transport has no remote host/user; force null so the
+            // hidden inputs can't leak stale values into the composed
+            // command when the user flips mosh → local mid-edit.
+            const isLocal = transport === 'local';
             return {
                 name, role, transport,
-                host: host || null,
-                user: user || null,
+                host: isLocal ? null : (host || null),
+                user: isLocal ? null : (user || null),
                 working_dir: workingDir,
                 project: project || null,
                 agent: agentName,
@@ -2201,6 +2227,11 @@
                 });
                 if (res.status === 201) {
                     const info = await res.json();
+                    // Remember the host we just used so the next worker
+                    // dialog pre-fills it. Skip for local transport.
+                    if (spec.transport !== 'local' && spec.host) {
+                        try { localStorage.setItem(LAST_HOST_KEY, spec.host); } catch (_) {}
+                    }
                     // Clear form.
                     ['new-name','new-host','new-user','new-dir','new-project','new-agent-args','new-agent-custom']
                         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
@@ -2300,8 +2331,10 @@
                         <option value="ssh"${spec.transport === 'ssh' ? ' selected' : ''}>ssh</option>
                     </select>
                 </label>
-                <label>User <input id="cfg-spec-user-${id}" value="${esc(spec.user)}" ${isRemote ? '' : 'disabled'}></label>
-                <label>Host <input id="cfg-spec-host-${id}" value="${esc(spec.host)}" ${isRemote ? '' : 'disabled'}></label>
+                <div class="cfg-spec-remote" id="cfg-spec-remote-${id}" style="display:${isRemote ? '' : 'none'};">
+                    <label>User <input id="cfg-spec-user-${id}" value="${esc(spec.user)}"></label>
+                    <label>Host <input id="cfg-spec-host-${id}" value="${esc(spec.host)}"></label>
+                </div>
                 <label>Working dir <input id="cfg-spec-dir-${id}" value="${esc(spec.working_dir)}"></label>
                 <label>Project <input id="cfg-spec-project-${id}" value="${esc(spec.project)}"></label>
                 <label>Agent <input id="cfg-spec-agent-${id}" value="${esc(spec.agent)}"></label>
@@ -2347,12 +2380,14 @@
             const project = v(`cfg-spec-project-${id}`);
             const agent = v(`cfg-spec-agent-${id}`);
             const args = v(`cfg-spec-args-${id}`);
+            const t = transport || 'local';
+            const isLocal = t === 'local';
             return {
                 name: id, // immutable; id is the stable key
                 role: role || 'worker',
-                transport: transport || 'local',
-                host: host ? host : null,
-                user: user ? user : null,
+                transport: t,
+                host: isLocal ? null : (host || null),
+                user: isLocal ? null : (user || null),
                 working_dir: dir,
                 project: project ? project : null,
                 agent: agent,
@@ -2388,13 +2423,10 @@
                 const err = document.getElementById(`cfg-spec-err-${id}`);
                 const missing = specMissingFields(spec);
                 if (err) err.textContent = missing.length ? `missing: ${missing.join(', ')}` : '';
-                // host/user disabled state follows transport.
-                const transport = spec.transport;
-                const remote = transport !== 'local';
-                const userEl = document.getElementById(`cfg-spec-user-${id}`);
-                const hostEl = document.getElementById(`cfg-spec-host-${id}`);
-                if (userEl) userEl.disabled = !remote;
-                if (hostEl) hostEl.disabled = !remote;
+                // host/user block hides entirely when transport=local.
+                const remote = spec.transport !== 'local';
+                const block = document.getElementById(`cfg-spec-remote-${id}`);
+                if (block) block.style.display = remote ? '' : 'none';
             };
             ['role', 'transport', 'user', 'host', 'dir', 'project', 'agent', 'args'].forEach((k) => {
                 const el = document.getElementById(`cfg-spec-${k}-${id}`);
