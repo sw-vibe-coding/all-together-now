@@ -79,6 +79,35 @@
         }
         .dashboard.treemap-mode .agent-panel.focus { outline: 2px solid #e94560; outline-offset: -2px; }
 
+        /* Selected window (click on a header) — accent outline so the
+           user can see which window will receive bare-key commands in
+           step 5. Distinct from the step-3 .focus outline which was
+           auto-picked; this one is explicitly click-driven. */
+        .dashboard.treemap-mode .agent-panel.selected { outline: 2px solid #4ecca3; outline-offset: -2px; }
+
+        /* Per-window chrome icon buttons (header right side). */
+        .agent-header .tile-actions .btn-icon {
+            background: transparent; border: 1px solid transparent;
+            color: #888; font-size: 12px; padding: 1px 5px; line-height: 1;
+            border-radius: 3px; cursor: pointer; min-width: 22px; text-align: center;
+        }
+        .agent-header .tile-actions .btn-icon:hover { background: #0f3460; color: #c9d1d9; border-color: #0f3460; }
+        .agent-header .tile-actions .btn-pin.pinned { color: #fbbf24; border-color: #fbbf24; }
+        .agent-header .tile-actions .btn-delete:hover { color: #fca5a5; border-color: #7f1d1d; background: #7f1d1d; }
+
+        /* Bottom dock — strip of minimized windows at the bottom of
+           the dashboard area, always visible when any window is
+           minimized. */
+        .window-dock { display: none; gap: 6px; padding: 6px 8px; border-top: 1px solid #0f3460; background: #16213e; overflow-x: auto; flex-shrink: 0; }
+        .window-dock.visible { display: flex; }
+        .dock-cell { flex: 0 0 auto; width: 180px; height: 48px; border: 1px solid #0f3460; border-radius: 4px; background: #0d1117; padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; position: relative; overflow: hidden; }
+        .dock-cell:hover { border-color: #4ecca3; }
+        .dock-cell .dock-head { display: flex; align-items: center; gap: 4px; font-size: 11px; min-width: 0; }
+        .dock-cell .dock-name { font-weight: 600; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+        .dock-cell .dock-role { font-size: 9px; color: #888; text-transform: uppercase; flex-shrink: 0; }
+        .dock-cell .dock-state { font-size: 9px; padding: 1px 4px; }
+        .dock-cell .dock-last { font-family: monospace; font-size: 9px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
         .agent-panel { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; min-height: 300px; overflow: auto; }
         .agent-header { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
         .agent-header .agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; }
@@ -407,6 +436,7 @@
     </div>
     <div class="pin-row" id="pin-row"></div>
     <div class="dashboard" id="dashboard"></div>
+    <div class="window-dock" id="window-dock"></div>
     <div class="wiki-container" id="wiki-view" style="display:none;">
         <div class="wiki-sidebar">
             <h3>Pages</h3>
@@ -631,24 +661,133 @@
             }
         }
 
-        // Global listeners: clicking a pin button toggles the pin;
-        // clicking an agent-header elsewhere dispatches swap-to-focus
-        // (complementing the compact-tile click from step 2).
+        // --- Window state + header-click + chrome button dispatch ---
+        //
+        // Click model (option C from the saga design):
+        //   - Clicking a window's header selects it (accent outline).
+        //     Bare-key shortcuts (step 5) will act on the selected window.
+        //   - Clicking an icon button in the header fires its action.
+        //   - Clicking inside the xterm body puts focus there; all keys
+        //     route to the PTY as usual.
+        //   - Clicking an empty area of the dashboard or pressing Esc
+        //     (step 5) deselects and restores any maximized window.
+
+        function windowSelect(id) {
+            layoutState.selectedId = id;
+            document.querySelectorAll('.agent-panel.selected').forEach((el) => {
+                el.classList.remove('selected');
+            });
+            if (id) {
+                const el = document.getElementById(`panel-${id}`);
+                if (el) el.classList.add('selected');
+                // Selected tile gets a crisp xterm at its real size.
+                fitSelectedTerm(id);
+            }
+        }
+
+        function fitSelectedTerm(id) {
+            const a = agents.get(id);
+            if (!a || !a.fitAddon) return;
+            try {
+                a.fitAddon.fit();
+                syncPtySize(id, a.term);
+            } catch (_) { /* xterm not rendered yet */ }
+        }
+
+        function windowMinimize(id) {
+            ensureWindow(id).state = 'minimized';
+            if (layoutState.selectedId === id) layoutState.selectedId = null;
+            saveLayoutPrefs();
+            applyLayoutFresh();
+        }
+
+        function windowMaximizeToggle(id) {
+            const w = ensureWindow(id);
+            if (w.state === 'maximized') {
+                w.state = 'normal';
+            } else {
+                // Only one maximized window at a time — restore any existing.
+                for (const other of agents.keys()) {
+                    const ow = layoutState.windows[other];
+                    if (ow && ow.state === 'maximized') ow.state = 'normal';
+                }
+                w.state = 'maximized';
+                layoutState.selectedId = id;
+            }
+            saveLayoutPrefs();
+            applyLayoutFresh();
+        }
+
+        function windowRestore(id) {
+            ensureWindow(id).state = 'normal';
+            saveLayoutPrefs();
+            applyLayoutFresh();
+        }
+
+        function applyLayoutFresh() {
+            const dashboard = document.getElementById('dashboard');
+            if (!dashboard) return;
+            applyLayout(computeLayout(dashboard));
+        }
+
+        function confirmDelete(id) {
+            if (!confirm(`Delete agent '${id}'? This cannot be undone.`)) return;
+            fetch(`${API_BASE}/api/agents/${id}`, { method: 'DELETE' })
+                .then(() => {
+                    const a = agents.get(id);
+                    if (a && a.evtSource) a.evtSource.close();
+                    if (a && a.panel) a.panel.remove();
+                    agents.delete(id);
+                    delete layoutState.windows[id];
+                    if (layoutState.selectedId === id) layoutState.selectedId = null;
+                    applyLayoutFresh();
+                    refreshDashboardLayout();
+                });
+        }
+
+        function reconnectAgent(id) {
+            fetch(`${API_BASE}/api/agents/${id}/reconnect`, { method: 'POST' })
+                .then((res) => {
+                    if (!res.ok) return;
+                    const a = agents.get(id);
+                    if (a && a.evtSource) a.evtSource.close();
+                    setTimeout(() => connectSSE(id), 1000);
+                });
+        }
+
+        // Single delegated click listener for everything inside an
+        // agent panel's header: icon buttons + header body click.
         document.addEventListener('click', (e) => {
-            const pinBtn = e.target.closest('.btn-pin[data-pin-id]');
-            if (pinBtn) {
-                togglePin(pinBtn.getAttribute('data-pin-id'));
-                e.stopPropagation();
+            // Dock cell clicks restore the agent.
+            const dockCell = e.target.closest('.dock-cell[data-window-id]');
+            if (dockCell) {
+                windowRestore(dockCell.getAttribute('data-window-id'));
                 return;
             }
+            // Chrome icon buttons on a window header.
+            const iconBtn = e.target.closest('.btn-icon[data-window-action][data-window-id]');
+            if (iconBtn) {
+                const id = iconBtn.getAttribute('data-window-id');
+                const action = iconBtn.getAttribute('data-window-action');
+                e.stopPropagation();
+                switch (action) {
+                    case 'minimize': windowMinimize(id); break;
+                    case 'maximize': windowMaximizeToggle(id); break;
+                    case 'pin':      togglePin(id); break;
+                    case 'config':   toggleConfig(id); break;
+                    case 'reconnect': reconnectAgent(id); break;
+                    case 'delete':   confirmDelete(id); break;
+                }
+                return;
+            }
+            // Clicking inside tile-actions bubble-catcher but not a button —
+            // do nothing (don't propagate to the select-on-header handler).
             if (e.target.closest('[data-no-focus]')) return;
-            const hdr = e.target.closest('.agent-header[data-focus-id]');
-            if (!hdr) return;
-            const id = hdr.getAttribute('data-focus-id');
-            if (!id) return;
-            document.dispatchEvent(new CustomEvent('swap-to-focus', {
-                detail: { agentId: id },
-            }));
+            // Otherwise clicking a window header = select that window.
+            const hdr = e.target.closest('.agent-header[data-window-id]');
+            if (hdr) {
+                windowSelect(hdr.getAttribute('data-window-id'));
+            }
         });
 
         // --- Keyboard shortcuts ---
@@ -1129,7 +1268,31 @@
             // Windowed UI saga (step 1): layout + sort modes.
             layoutMode: 'tiled', // 'tiled' (step 1) | future 'stack' | 'carousel'
             sortMode: 'name',    // 'name' (step 1) | future 'recent'
+            // Windowed UI saga (step 2): per-window state + click-selected.
+            windows: {}, // { [id]: { state: 'normal'|'minimized'|'maximized', pinned: bool } }
+            selectedId: null,
         };
+
+        function ensureWindow(id) {
+            if (!layoutState.windows[id]) {
+                layoutState.windows[id] = {
+                    state: 'normal',
+                    pinned: layoutState.pins.has(id),
+                };
+            }
+            return layoutState.windows[id];
+        }
+
+        function windowState(id) {
+            return (layoutState.windows[id] && layoutState.windows[id].state) || 'normal';
+        }
+
+        function hasMaximized() {
+            for (const id of agents.keys()) {
+                if (windowState(id) === 'maximized') return id;
+            }
+            return null;
+        }
 
         /** Returns true if agentId passes the current filter. Pinned agents
          *  are not auto-included here — callers decide whether to override
@@ -1447,6 +1610,42 @@
             }
         }
 
+        function renderWindowDock(minimized) {
+            const dock = document.getElementById('window-dock');
+            if (!dock) return;
+            dock.classList.toggle('visible', minimized.length > 0);
+            dock.innerHTML = '';
+            for (const item of minimized) {
+                const a = agents.get(item.id);
+                if (!a) continue;
+                const info = a.info || {};
+                const stateObj = info.state || { state: 'idle' };
+                const sk = stateKey(stateObj);
+                const nameTxt = a.panel?.querySelector?.('.agent-name')?.textContent || item.id;
+                const roleTxt = a.panel?.querySelector?.('.agent-role')?.textContent || '';
+                const lastLine = a.lastLine || '';
+                const cell = document.createElement('div');
+                cell.className = 'dock-cell';
+                cell.dataset.windowId = item.id;
+                cell.title = `Restore ${nameTxt}`;
+                cell.innerHTML = `
+                    <div class="dock-head">
+                        <span class="dock-name">${escapeHTML(nameTxt)}</span>
+                        <span class="dock-role">${escapeHTML(roleTxt)}</span>
+                        <span class="state-badge state-${sk} dock-state">${stateLabel(stateObj)}</span>
+                    </div>
+                    <div class="dock-last">${escapeHTML(lastLine) || '&nbsp;'}</div>
+                `;
+                dock.appendChild(cell);
+            }
+        }
+
+        function escapeHTML(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
         function syncPinFilteredLabels() {
             document.querySelectorAll('.pin-cell[data-agent-id]').forEach((cell) => {
                 const id = cell.getAttribute('data-agent-id');
@@ -1543,8 +1742,8 @@
         }
 
         function computeLayout(container) {
-            const items = buildLayoutItems();
-            if (items.length === 0) return { windows: [] };
+            const all = buildLayoutItems();
+            if (all.length === 0) return { windows: [], minimized: [] };
 
             const rect = {
                 x: 4,
@@ -1553,20 +1752,40 @@
                 h: Math.max(200, container.clientHeight - 8),
             };
 
-            // First coordinator in name order is the prominent window.
-            const coordIdx = items.findIndex((it) => roleOf(it.id) === 'coordinator');
-            const coord = coordIdx >= 0 ? items[coordIdx] : null;
-            const workers = coord
-                ? items.filter((_, i) => i !== coordIdx)
-                : items.slice();
+            // Separate minimized and maximized from normal-state agents.
+            const minimized = all.filter((it) => windowState(it.id) === 'minimized');
+            const maxed = all.find((it) => windowState(it.id) === 'maximized');
 
-            if (!coord && workers.length === 0) return { windows: [] };
-            if (!coord) return { windows: gridRects(rect, workers) };
-            if (workers.length === 0) {
-                return { windows: [{ id: coord.id, ...rect }] };
+            // Maximized short-circuits everything: one window fills ~80%
+            // centered, every other window is implicitly dock-minimized
+            // for the duration (without mutating their stored state).
+            if (maxed) {
+                const maxW = Math.floor(rect.w * 0.8);
+                const maxH = Math.floor(rect.h * 0.9);
+                const maxRect = {
+                    id: maxed.id,
+                    x: rect.x + Math.floor((rect.w - maxW) / 2),
+                    y: rect.y + Math.floor((rect.h - maxH) / 2),
+                    w: maxW, h: maxH,
+                };
+                const implicitDock = all.filter((it) => it.id !== maxed.id);
+                return { windows: [maxRect], minimized: implicitDock };
             }
 
-            // Coord on the left, workers gridded on the right.
+            // Otherwise lay out normal-state agents (dock minimized separately).
+            const normal = all.filter((it) => windowState(it.id) === 'normal');
+            if (normal.length === 0) return { windows: [], minimized };
+
+            const coordIdx = normal.findIndex((it) => roleOf(it.id) === 'coordinator');
+            const coord = coordIdx >= 0 ? normal[coordIdx] : null;
+            const workers = coord
+                ? normal.filter((_, i) => i !== coordIdx)
+                : normal.slice();
+
+            if (!coord) return { windows: gridRects(rect, workers), minimized };
+            if (workers.length === 0) {
+                return { windows: [{ id: coord.id, ...rect }], minimized };
+            }
             const coordW = Math.floor(rect.w * COORD_FRAC) - TILE_GAP / 2;
             const coordRect = { id: coord.id, x: rect.x, y: rect.y, w: coordW, h: rect.h };
             const workerArea = {
@@ -1575,7 +1794,10 @@
                 w: rect.w - coordW - TILE_GAP,
                 h: rect.h,
             };
-            return { windows: [coordRect, ...gridRects(workerArea, workers)] };
+            return {
+                windows: [coordRect, ...gridRects(workerArea, workers)],
+                minimized,
+            };
         }
 
         /** Partition items by a group key drawn from agent meta. Returns an
@@ -1656,9 +1878,11 @@
             const dashboard = document.getElementById('dashboard');
             if (!dashboard) return;
             const windows = layout.windows || [];
+            const minimized = layout.minimized || [];
             atnDebug.log('apply', {
                 count: windows.length,
                 ids: windows.map(w => `${w.id}(${Math.round(w.w)}x${Math.round(w.h)})`),
+                min: minimized.map(m => m.id),
             });
             const place = (id, rect) => {
                 const el = document.getElementById(`panel-${id}`)
@@ -1668,14 +1892,12 @@
                 el.style.top = `${rect.y}px`;
                 el.style.width = `${rect.w}px`;
                 el.style.height = `${rect.h}px`;
-                // Clear the step-3 focus outline — step 2 of the windowed
-                // saga will add a proper .selected class instead.
                 if (el.classList.contains('agent-panel')) {
                     el.classList.remove('focus');
                 }
             };
             // Move any not-in-layout panels off-screen (pinned agents,
-            // filter misses — the pin row / future chrome shows them).
+            // filter misses, minimized agents — the dock shows those).
             const visibleIds = new Set(windows.map(w => w.id));
             for (const id of agents.keys()) {
                 if (layoutState.pins.has(id)) continue;
@@ -1693,9 +1915,20 @@
                 ensureModeFor(w.id, w);
                 place(w.id, w);
             }
+            // Selected outline follows state.
+            document.querySelectorAll('.agent-panel.selected').forEach(el => el.classList.remove('selected'));
+            if (layoutState.selectedId) {
+                const sel = document.getElementById(`panel-${layoutState.selectedId}`);
+                if (sel) {
+                    sel.classList.add('selected');
+                    // Selected non-minimized tile gets full xterm fit.
+                    fitSelectedTerm(layoutState.selectedId);
+                }
+            }
             // Step 1 has no group bands; clear any that may have been left
             // over from a stale layout.
             dashboard.querySelectorAll('.group-band').forEach((b) => b.remove());
+            renderWindowDock(minimized);
             // Refresh the pin row so (filtered) labels update.
             syncPinFilteredLabels();
             // After positions change, update per-xterm scales.
@@ -1783,13 +2016,18 @@
                 : `${agent.name}`;
 
             panel.innerHTML = `
-                <div class="agent-header" data-focus-id="${agent.id}" style="cursor: pointer;" title="Click to focus">
+                <div class="agent-header" data-window-id="${agent.id}" style="cursor: pointer;" title="Click to select">
                     <span class="agent-name" title="${launchTip}">${agent.name}</span>
                     <span class="agent-role">${agent.role}</span>
                     <span id="saga-badge-${agent.id}" style="font-size:11px;color:#a78bfa;"></span>
                     <span class="spacer"></span>
                     <span class="tile-actions" data-no-focus="1">
-                        <button class="btn-pin" data-pin-id="${agent.id}" title="Pin to always-visible row">📌</button>
+                        <button class="btn-icon btn-min" data-window-action="minimize" data-window-id="${agent.id}" title="Minimize (m)">_</button>
+                        <button class="btn-icon btn-max" data-window-action="maximize" data-window-id="${agent.id}" title="Maximize / restore (M)">□</button>
+                        <button class="btn-icon btn-pin" data-window-action="pin" data-window-id="${agent.id}" title="Pin (p)">📌</button>
+                        <button class="btn-icon btn-cfg" data-window-action="config" data-window-id="${agent.id}" title="Config">▸</button>
+                        <button class="btn-icon btn-rc" data-window-action="reconnect" data-window-id="${agent.id}" title="Reconnect">↻</button>
+                        <button class="btn-icon btn-delete" data-window-action="delete" data-window-id="${agent.id}" title="Delete">✕</button>
                     </span>
                     <span class="conn-dot disconnected" id="conn-${agent.id}"></span>
                     <span class="state-badge state-${sk}" id="badge-${agent.id}">${stateLabel(agent.state)}</span>
