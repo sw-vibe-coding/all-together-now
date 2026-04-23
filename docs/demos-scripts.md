@@ -27,9 +27,10 @@ time window.
 | 3 | Three-agent topology (fake shims)       | 4 min    | No                    |
 | 4 | Reconnect after mosh drop               | 5 min    | **Yes** (or substitute) |
 | 5 | Graceful delete clears remote tmux      | 2 min    | **Yes**               |
-| 6 | Treemap scale-UI (heat + focus + pin + kbd) | 6 min | No                    |
+| 6 | Treemap scale-UI (legacy model)         | 6 min    | No                    |
 | 7 | REST API tour                           | 4 min    | No                    |
-| 8 | Scale-UI fleet (21 fake agents)         | 5–15 min | No                    |
+| 8 | Scale-UI fleet, 21 fake agents (legacy) | 5–15 min | No                    |
+| 9 | Windowed UI — layouts + pin + keyboard  | 5 min    | No                    |
 
 What is **not** demoable yet: the Ollama / CUDA transports (future
 sagas). Everything else in the scale-UI saga (search, chips, grouping,
@@ -269,7 +270,13 @@ Nothing to do — the delete path is the cleanup.
 
 ---
 
-## Demo 6 — Treemap scale-UI
+## Demo 6 — Treemap scale-UI (legacy model)
+
+> This is the legacy scale-UI. The default dashboard is now the
+> **windowed UI** — see [Demo 9](#demo-9--windowed-ui) and
+> [docs/windowed-ui.md](./windowed-ui.md). The treemap remains useful
+> for ~20+ agent fleets (see Demo 8) where heat-sized tile area is
+> load-bearing.
 
 **What it shows** (scale-UI saga, steps 1–5)
 - Per-agent **heat** score (EWMA of bytes-per-second + state
@@ -422,7 +429,12 @@ Delete any lingering agents (the last curl above does it).
 
 ---
 
-## Demo 8 — Scale-UI fleet (21 fake agents)
+## Demo 8 — Scale-UI fleet, 21 fake agents (legacy model)
+
+> Legacy scale-UI walkthrough — kept because it's still the right
+> lens for ~20+ agent fleets where tile-area-by-heat matters. For
+> day-to-day usage with a handful of long-lived agents, see
+> [Demo 9](#demo-9--windowed-ui).
 
 **What it shows**
 - Everything scale-UI saga steps 1–7: heat-sized treemap, click-to-focus
@@ -477,15 +489,92 @@ done
 
 ---
 
+## Demo 9 — Windowed UI
+
+**What it shows** (windowed-UI saga, steps 1–6)
+- Three layout modes — **Tiled** (grid), **Stack** (one primary +
+  dock), **Carousel** (primary + prev/next peeks) — selectable in
+  the top bar. Coord always occupies the prominent slot.
+- Per-window chrome (minimize, maximize/restore, pin, config,
+  reconnect, delete) and click-to-select with accent-green outline.
+- **Pin = lock-in-place**: pinning snapshots the window's current
+  rect; subsequent layout ops skip it, so it floats at that rect.
+- Sparkline row at the top with one cell per agent (`flex: 1 1 0`,
+  ~1/n of width). Click a cell to focus that agent.
+- Keyboard (Option C): `m` minimize, `M` maximize/restore, `p` pin,
+  `←/→` cycle, `1..9` jump, `Esc` restore-then-deselect. Guarded
+  by `isTypingTarget` + `document.activeElement.closest('.xterm')`.
+- Persistence in `localStorage` under `atn-window-ui-v1` —
+  layoutMode / sortMode / selectedId / per-window state (including
+  pinnedRect) survive a hard refresh.
+
+**Why it matters**
+- The treemap (Demo 6 + 8) is great at 20+ agents but over-engineered
+  for the common case of 3–10 long-lived agents. The windowed model
+  matches desktop-manager intuitions, so users don't have to learn a
+  custom vocabulary.
+
+**Setup**
+```bash
+./demos/windowed-ui/setup.sh
+```
+
+The script boots (or reuses) `atn-server` on :7500 and POSTs 4 local
+fake agents (1 coordinator + 3 workers). Open http://localhost:7500.
+
+**Steps**
+1. Default view is **Tiled**: coordinator in the left 55%, three
+   workers tiled in the right 45%. The sparkline strip at the top
+   shows four equal cells with live bytes/sec sparklines.
+2. Click the **Stack** button. Coordinator fills ~80% of viewport;
+   the three workers collapse to the bottom dock.
+3. Click any dock cell — it swaps into the primary slot.
+4. Click **Carousel**. One window at center, prev/next peek at the
+   edges. Press `◀` / `▶` (top-bar buttons) or `←` / `→` (keyboard)
+   to cycle.
+5. Back in **Tiled**, click `worker-1`'s header (accent outline
+   appears). Press `m` → it minimizes to the dock. Press `1` → the
+   first non-minimized window is selected. Press `M` → it maximizes.
+   Press `Esc` twice (first restores max, second deselects).
+6. Select a worker. Press `p` — an amber outline + 📌 appear in
+   its corner. Switch to Stack / Carousel: the pinned window stays
+   put while the rest rearrange around it. Press `p` again to
+   unpin.
+7. Click inside an xterm → the **typing to PTY** badge appears near
+   that panel's Send button. Now `m` types the letter `m` into the
+   terminal instead of minimizing. Press `Esc` → back to window
+   management.
+8. Hard-refresh the browser. Layout mode, sort, pins, per-window
+   states all come back.
+
+**Cleanup**
+```bash
+for id in coord worker-1 worker-2 worker-3; do
+  curl -X DELETE http://localhost:7500/api/agents/$id
+done
+```
+Or Ctrl-C the terminal running `setup.sh` if it launched the server.
+
+**Variations**
+- Switch `sort` to **Recent** — the sparkline-row order + the Tiled
+  worker order now follow smoothed bytes/sec.
+- Pin two windows at once (e.g. coord + a worker), then flip through
+  every layout. Pins stay anchored.
+- With one window maximized, press `Esc` → it restores. Press `Esc`
+  again → deselects.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
-- **5–10 min, no infra**: Demo 3 + the middle of Demo 6 (type into a
-  bash agent, watch its tile grow).
+- **5–10 min, no infra**: Demo 9 (windowed UI) is the best tour of
+  the whole UX in the shortest time. For the heat-sized variant,
+  Demo 3 + the middle of Demo 6 still work (legacy).
 - **10–15 min, real rack host**: Demos 1 → 2 (preview) → 4 (reconnect)
   → 5 (cleanup). That's the full uber-use-case story.
 - **Integrations / API-minded audience**: Demo 7 + a click-through of
-  Demo 6.
+  Demo 9.
 
 ## When new demos arrive
 
@@ -496,6 +585,9 @@ See also:
 - [docs/uber-use-case.md](./uber-use-case.md) — design story
 - [docs/demo-three-agent.md](./demo-three-agent.md) — the three-agent
   demo in more depth
+- [docs/windowed-ui.md](./windowed-ui.md) — the windowed-UI walkthrough
+  (primary model)
 - [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
+  (legacy)
 - [docs/remote-pty.md](./remote-pty.md) — manual remote PTY
   walkthrough

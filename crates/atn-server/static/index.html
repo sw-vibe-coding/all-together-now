@@ -397,6 +397,11 @@
             <button class="layout-btn" data-layout="stack">Stack</button>
             <button class="layout-btn" data-layout="carousel">Carousel</button>
         </div>
+        <div class="layout-selector" id="sort-selector" title="Window sort order">
+            <span class="layout-label">sort</span>
+            <button class="layout-btn active" data-sort="name">Name</button>
+            <button class="layout-btn" data-sort="recent">Recent</button>
+        </div>
         <div class="carousel-nav" id="carousel-nav" title="Cycle carousel focus">
             <button class="carousel-btn" data-carousel="prev" title="Previous (←)">◀</button>
             <button class="carousel-btn" data-carousel="next" title="Next (→)">▶</button>
@@ -742,6 +747,7 @@
                 // Selected tile gets a crisp xterm at its real size.
                 fitSelectedTerm(id);
             }
+            saveWindowUiPrefs();
             // Carousel centers the selected window — re-layout so the
             // clicked peek snaps to the primary slot.
             if (layoutState.layoutMode === 'carousel') {
@@ -1372,6 +1378,11 @@
         const FOCUS_WIDTHS = { medium: [0.4, 0.5], large: [0.55, 0.7] };
         const PINS_MAX = 6;
         const LAYOUT_PREFS_KEY = 'atn-scale-ui-v1';
+        // Windowed-UI persistence (saga step 6). Separate key so the
+        // window-manager state (layout/sort/selection/per-window) is
+        // cleanly split from the legacy scale-UI bits (filter chips,
+        // focus-size, named layouts).
+        const WINDOW_PREFS_KEY = 'atn-window-ui-v1';
 
         const layoutState = {
             focusId: null,
@@ -1487,6 +1498,71 @@
                 });
                 localStorage.setItem(LAYOUT_PREFS_KEY, data);
             } catch (_) { /* localStorage unavailable or full — ignore */ }
+            saveWindowUiPrefs();
+        }
+
+        function saveWindowUiPrefs() {
+            // atn-window-ui-v1: the windowed-UI state only (layout +
+            // sort + selected + per-window overrides). Omits default-state
+            // windows to keep the blob small.
+            try {
+                const windowsOut = {};
+                for (const [id, w] of Object.entries(layoutState.windows)) {
+                    const state = w.state || 'normal';
+                    const pinned = layoutState.pins.has(id);
+                    const pinnedRect = w.pinnedRect || null;
+                    // Only record windows that diverge from "normal + not pinned".
+                    if (state === 'normal' && !pinned) continue;
+                    const entry = { state };
+                    if (pinned) entry.pinned = true;
+                    if (pinnedRect) entry.pinnedRect = pinnedRect;
+                    windowsOut[id] = entry;
+                }
+                const data = JSON.stringify({
+                    layoutMode: layoutState.layoutMode,
+                    sortMode: layoutState.sortMode,
+                    selectedId: layoutState.selectedId,
+                    windows: windowsOut,
+                });
+                localStorage.setItem(WINDOW_PREFS_KEY, data);
+            } catch (_) { /* localStorage unavailable or full — ignore */ }
+        }
+
+        function loadWindowUiPrefs() {
+            // Read atn-window-ui-v1 and apply. Runs after loadLayoutPrefs
+            // so it wins for overlapping fields (layoutMode, sortMode,
+            // per-window state). Silent on malformed JSON.
+            try {
+                const raw = localStorage.getItem(WINDOW_PREFS_KEY);
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                if (data.layoutMode === 'tiled' || data.layoutMode === 'stack' || data.layoutMode === 'carousel') {
+                    layoutState.layoutMode = data.layoutMode;
+                }
+                if (data.sortMode === 'name' || data.sortMode === 'recent') {
+                    layoutState.sortMode = data.sortMode;
+                }
+                if (typeof data.selectedId === 'string' || data.selectedId === null) {
+                    layoutState.selectedId = data.selectedId;
+                }
+                if (data.windows && typeof data.windows === 'object') {
+                    for (const [id, w] of Object.entries(data.windows)) {
+                        const state = (w && (w.state === 'minimized' || w.state === 'maximized'))
+                            ? w.state : 'normal';
+                        const pr = w && w.pinnedRect;
+                        const pinnedRect = (pr && typeof pr === 'object'
+                            && typeof pr.x === 'number' && typeof pr.y === 'number'
+                            && typeof pr.w === 'number' && typeof pr.h === 'number')
+                            ? { x: pr.x, y: pr.y, w: pr.w, h: pr.h } : undefined;
+                        if (w && w.pinned === true) layoutState.pins.add(id);
+                        layoutState.windows[id] = {
+                            state,
+                            pinned: layoutState.pins.has(id),
+                            ...(pinnedRect ? { pinnedRect } : {}),
+                        };
+                    }
+                }
+            } catch (_) { /* malformed — drop */ }
         }
 
         // --- Saved layouts ---
@@ -1843,12 +1919,23 @@
         }
 
         function buildLayoutItems() {
-            // Name-sorted, non-pinned, non-filtered agents. Coord promotion
-            // is done inside computeLayout so the sort is a stable default
-            // without special-casing here.
+            // Non-pinned + filter-matching agents, sorted by `sortMode`.
+            // 'name'   — stable alphabetic (default, coord-first via
+            //            computeLayout's coord-promotion path).
+            // 'recent' — most-recent-output first (smoothed heat desc),
+            //            with name as a stable tiebreaker.
             const ids = Array.from(agents.keys())
                 .filter((id) => !layoutState.pins.has(id) && matchesFilter(id));
-            ids.sort((a, b) => a.localeCompare(b));
+            if (layoutState.sortMode === 'recent') {
+                ids.sort((a, b) => {
+                    const ha = layoutState.smoothed.get(a) || 0;
+                    const hb = layoutState.smoothed.get(b) || 0;
+                    if (hb !== ha) return hb - ha;
+                    return a.localeCompare(b);
+                });
+            } else {
+                ids.sort((a, b) => a.localeCompare(b));
+            }
             return ids.map((id) => ({ id }));
         }
 
@@ -1971,12 +2058,31 @@
             document.querySelectorAll('.layout-btn[data-layout]').forEach((btn) => {
                 btn.addEventListener('click', () => setLayoutMode(btn.dataset.layout));
             });
+            document.querySelectorAll('.layout-btn[data-sort]').forEach((btn) => {
+                btn.addEventListener('click', () => setSortMode(btn.dataset.sort));
+            });
             document.querySelectorAll('.carousel-btn[data-carousel]').forEach((btn) => {
                 const dir = btn.dataset.carousel === 'next' ? 1 : -1;
                 btn.addEventListener('click', () => carouselCycle(dir));
             });
             updateLayoutSelector();
+            updateSortSelector();
             updateCarouselNav();
+        }
+
+        function setSortMode(mode) {
+            if (mode !== 'name' && mode !== 'recent') return;
+            if (layoutState.sortMode === mode) return;
+            layoutState.sortMode = mode;
+            saveLayoutPrefs();
+            updateSortSelector();
+            applyLayoutFresh();
+        }
+
+        function updateSortSelector() {
+            document.querySelectorAll('.layout-btn[data-sort]').forEach((btn) => {
+                btn.classList.toggle('active', btn.dataset.sort === layoutState.sortMode);
+            });
         }
 
         // --- Windowed layout (saga: windowed-ui) ---
@@ -2771,6 +2877,7 @@
             // group-by) before the first layout so they're honored on the
             // very first render.
             loadLayoutPrefs();
+            loadWindowUiPrefs();
             renderSparklineRow();
             syncPinButtons();
 

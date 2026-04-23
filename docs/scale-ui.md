@@ -1,5 +1,12 @@
 # Scale-UI Walkthrough
 
+> **Legacy model.** The dashboard's primary model is now the
+> **windowed UI** — see [docs/windowed-ui.md](./windowed-ui.md) for
+> layouts / chrome / keyboard / pin-as-lock. This walkthrough still
+> works (treemap + heat-sized tiles + auto-focus) and remains the
+> right choice for ~20+ agent fleets where tile-area-by-heat
+> becomes load-bearing.
+
 End-to-end tour of the scale-UI (saga steps 1–7) using a fleet of 21 fake
 agents that exercise every part of the treemap. About 15 minutes if you
 play through every section; 5 if you just want the money shot.

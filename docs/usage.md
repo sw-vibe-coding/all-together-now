@@ -10,6 +10,7 @@
   want to run agents on
 
 See also:
+- [Windowed UI](./windowed-ui.md) — the primary dashboard model (layouts, chrome, pin, keyboard)
 - [Demo scripts](./demos-scripts.md) — every demo you can run against the current build, grouped by time + prereqs
 - [Uber use-case](./uber-use-case.md) — the isolation-first multi-agent story
 - [Three-agent demo walkthrough](./demo-three-agent.md)
@@ -88,43 +89,59 @@ Missing or malformed fields show up inline (`missing: host, user`) and the
 
 ## Dashboard Views
 
-### Agents (default)
+### Agents (default) — windowed UI
 
-Treemap layout — one large focus panel + a heat-sized cloud of smaller
-tiles. See [docs/scale-ui.md](./scale-ui.md) for a hands-on walkthrough
-with a 21-agent fleet.
+The dashboard uses a desktop-windowing model. See
+[docs/windowed-ui.md](./windowed-ui.md) for the full walkthrough; this
+section is the quick operational summary.
 
-- **Focus panel** (left, ~40–55% width): the coordinator by default,
-  else the hottest agent. Shows name, role, saga step badge, state,
-  and the full xterm terminal.
-- **Treemap** (right): every other non-pinned agent, tile area
-  proportional to a smoothed heat score
-  (bytes/sec EWMA + state multipliers — `awaiting_human_input` and
-  `error` boost; `disconnected` mutes). Click any tile's header to
-  promote it into focus; the layout freezes for 5 s so you can read.
-- **Tiles below a threshold scale** render as a compact variant: name,
-  role, state badge, inline sparkline of the last 60 s of bytes/sec,
-  and the last line of output. No xterm DOM in the compact tile.
-- **Pin row** (above the treemap): up to 6 agents you want always
-  visible at a stable size. Pinned agents are excluded from heat-sized
-  tiling. Click the 📌 on a header or press `p` to pin/unpin the
-  focused agent.
-- **Filter bar** (above the pin row): `/` focuses the fuzzy-match
-  input; chips AND across categories (transport / role / state) and
-  OR within. `group-by: role|project` packs related agents into
-  labeled bands. A Layouts dropdown saves named snapshots of
-  `{pins, focus, focus size, filter text, chips, group-by}` to
-  localStorage.
-- **Keyboard**: `1..9` focus Nth hottest, `0` coordinator, `f` toggle
-  focus size, `p` pin/unpin focus, `/` filter, `Esc` clear focus.
-- **Persistence**: pins, focus, filter, and group-by survive browser
-  refreshes via `localStorage`.
-- **Per-agent controls** in the focus panel: input box, Send, Ctrl-C,
-  Restart, Reconnect, Stop, Delete.
+- **Layouts**: **Tiled** (grid, coord left), **Stack** (primary at
+  ~80% + dock of minimized), **Carousel** (primary + prev/next peeks
+  + `◀` / `▶` cycle). Picked from the top bar; `atn-window-ui-v1`
+  persists the choice.
+- **Sort**: `Name` (default) or `Recent` (smoothed bytes/sec desc).
+  Drives the worker order in Tiled and the cycle ring in Carousel.
+- **Per-window chrome** in the header: minimize, maximize/restore,
+  pin, config, reconnect, delete. Clicking the header **selects**
+  the window (accent outline); bare keys act on the selected one.
+- **Pin = lock-in-place**. First click snapshots the current
+  `{x, y, w, h}`; subsequent layout ops (mode switch, cycle, dock
+  promote) skip the pinned window and overlay it at that rect.
+  Unpin with the same button.
+- **Sparkline row** above the dashboard: one flex-1 cell per agent
+  (≈1/n of width) with live sparkline + last-line + pin indicator.
+  Click a cell to focus that agent.
+- **Window dock**: strip along the bottom with one cell per
+  minimized agent (regular click restores, or in Stack/Carousel
+  promotes the cell into the primary slot).
+- **Keyboard (Option C)**: `m` minimize, `M` maximize/restore, `p`
+  pin, `←/→` cycle focus, `1..9` jump by sort order, `/` filter,
+  `Esc` restore-then-deselect. Bindings fire only when no
+  input/textarea/xterm has focus; when an xterm is focused, a
+  **typing to PTY** badge appears near Send.
+- **Per-agent controls** below the xterm: Send, Ctrl-C, Restart,
+  Reconnect, Stop, Config, Delete. Send posts `text + "\r"` to
+  `/api/agents/{id}/input` as a single atomic write.
+- **Compact tiles**: when a window's allotted rect is too small to
+  host a readable xterm (carousel peeks, dense tiled grids), the
+  panel swaps to a compact tile (name, role, state, sparkline,
+  last-line). No xterm DOM in the compact variant.
+- **Filter bar** (legacy, above the sparkline row): `/` focuses the
+  fuzzy-match input; chips AND across categories (transport / role
+  / state) and OR within; `group-by: role|project` is a scale-UI
+  affordance. Named saved layouts continue to live under
+  `atn-scale-ui-v1`.
+- **Persistence**: `atn-window-ui-v1` carries layoutMode, sortMode,
+  selectedId, and per-window `{state, pinned, pinnedRect}` across
+  hard refreshes.
 
 All tile resizes are pure CSS `transform: scale()`; xterm renders at
-fixed 120×40 native geometry and the PTY only resizes when an agent is
-explicitly focused.
+fixed 120×40 native geometry and the PTY only resizes when the
+selected window is promoted / maximized.
+
+For ~20+ agent fleets where heat-sized tile area matters, the legacy
+**treemap** model is still available — see
+[docs/scale-ui.md](./scale-ui.md).
 
 ### Graph
 

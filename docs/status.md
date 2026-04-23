@@ -1,6 +1,15 @@
 # All Together Now — Status
 
-## Current State: Remote-Agent Demo Saga Complete
+## Current State: Windowed-UI Saga Complete
+
+The dashboard now ships a desktop-window-manager model (Tiled / Stack
+/ Carousel + per-window chrome + keyboard Option C). The heat-sized
+treemap (scale-UI saga) is preserved as the legacy model for
+large-fleet use — see
+[docs/windowed-ui.md](./windowed-ui.md) for the new model and
+[docs/scale-ui.md](./scale-ui.md) for the legacy walkthrough.
+
+## Prior Milestone: Remote-Agent Demo Saga Complete
 
 Phases 0–8 shipped plus the follow-on **remote-agent demo saga** (5 steps,
 all shipped in this sequence):
@@ -62,6 +71,12 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | S6 | Demo scripts: docs/demos-scripts.md menu of runnable demos | Done |
 | S7 | Search + chips + group-by + saved layouts | Done |
 | S8 | Scale-UI fleet (21 fake agents) + docs/scale-ui.md walkthrough | Done |
+| W1 | Windowed-UI tiled foundation: strip treemap/squarify; coord-left + workers grid | Done |
+| W2 | Window chrome: per-panel min/max/pin/config/reconnect/delete + click-to-select + bottom dock | Done |
+| W3 | Stack layout: one primary at ~80% + dock of minimized; enter/leave reconcile state | Done |
+| W4 | Carousel layout: primary + prev/next peeks + `◀/▶` cycle (excludes minimized) | Done |
+| W5 | Keyboard Option C: `m`/`M`/`p`/`←→`/`1..9`/`Esc` on selected, guarded by xterm focus | Done |
+| W6 | Persistence (`atn-window-ui-v1`) + sort selector + `docs/windowed-ui.md` + `demos/windowed-ui/setup.sh` + Demo 9 + scale-ui.md legacy banner | Done |
 
 ## Demo
 
