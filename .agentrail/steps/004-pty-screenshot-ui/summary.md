@@ -1,0 +1,1 @@
+Added 📸 chrome button + snapshotAgent(id) helper. Clicks open /api/agents/<id>/screenshot?format=text&rows=40&cols=120 in a new tab. Docs updated. Verified live via Playwright on 3-agent demo — icon on every panel, click fires correct URL, endpoint returns expected text.

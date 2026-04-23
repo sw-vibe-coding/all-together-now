@@ -1,6 +1,6 @@
 number = 4
 slug = "pty-screenshot-ui"
-status = "pending"
+status = "completed"
 description = """
 ## Step 4: 📸 snapshot button in window chrome
 
@@ -8,5 +8,6 @@ Add a per-window snapshot a..."""
 role = "production"
 context_files = []
 created_at = "2026-04-22T20:40:06"
+completed_at = "2026-04-23T13:58:59"
 task_type = "yew-component"
-commits = []
+commits = ["87766f7a9b9dc3dea8c510d6665b3f0f0e7df89a"]

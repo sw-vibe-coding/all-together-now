@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 4,
+    "step": "pty-screenshot-ui"
+  },
+  "action": "Added <button class='btn-icon btn-snap' data-window-action='snapshot' data-window-id> with 📸 glyph between Config and Reconnect in createAgentPanel template. Added 'snapshot' case to the delegated icon-click switch. New snapshotAgent(id) fn does window.open with encodeURIComponent + noopener. Exposed on window.snapshotAgent alongside togglePin. Added 📸 row to docs/windowed-ui.md chrome table. Playwright smoke confirmed 3/3 camera buttons, window.snapshotAgent is function, click invokes window.open('/api/agents/coordinator/screenshot?format=text&rows=40&cols=120','_blank','noopener'), endpoint returns 200 text/plain with prompt content. cargo clippy + test + doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T13:58:59"
+}
