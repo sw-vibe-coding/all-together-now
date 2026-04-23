@@ -10,6 +10,7 @@ portable-pty = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+vt100 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

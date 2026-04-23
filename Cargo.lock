@@ -122,6 +122,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "vt100",
 ]
 
 [[package]]
