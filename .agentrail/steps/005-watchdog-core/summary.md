@@ -1,0 +1,1 @@
+Added WatchdogConfig (atn-core) + WatchdogState runtime (atn-pty). State tracker owns the watchdog, polls at 1s, fires one-shot stall on threshold crossing, clears on output/state-change. AgentInfo gains stalled + stalled_for_secs. Live smoke: bash+sleep agent flips stalled=true at t+3s (stall_secs=3), stalled_for climbs, clears when state → idle.

@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-pty-integration",
+  "state": {
+    "number": 5,
+    "step": "watchdog-core"
+  },
+  "action": "Added atn-core/src/watchdog.rs (WatchdogConfig, DEFAULT_STALL_SECS=60, Default impl). SpawnSpec + AgentConfig gain optional watchdog field with serde skip_serializing_if. ProjectConfig::to_agent_config threads spec.watchdog through. atn-pty/src/watchdog.rs (WatchdogState, on_output/on_entering_running/on_leaving_running/check_stall/stalled_for_secs/running_for_secs). spawn_state_tracker signature extended with Arc<RwLock<WatchdogState>> + agent_id; poll loop uses min(1s tick, idle_deadline); updates watchdog on every event path; converts tokio::time::Instant to std via into_std at the boundary. PtySession::watchdog() accessor. AgentInfo gains stalled + stalled_for_secs; list_agents + agent_state + create_agent populate them. Fixed clippy (unwrap_or_default, collapsible_if). Added watchdog: None to every SpawnSpec/AgentConfig literal (agent.rs, config.rs, spawn_spec.rs, integration.rs, main.rs, server spawn path uses spec.watchdog). Full workspace cargo test/clippy/doc clean. Live verified stall at +3s with stalled_for counter, clears on idle.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T16:55:56"
+}
