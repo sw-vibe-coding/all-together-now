@@ -11,6 +11,7 @@ use atn_core::event::{InputEvent, OutputSignal};
 use crate::reader::spawn_reader_task;
 use crate::state_tracker::spawn_state_tracker;
 use crate::transcript::TranscriptWriter;
+use crate::watchdog::WatchdogState;
 use crate::writer::spawn_writer_task;
 
 const PTY_ROWS: u16 = 40;
@@ -27,6 +28,7 @@ pub struct PtySession {
     input_tx: mpsc::Sender<InputEvent>,
     output_tx: broadcast::Sender<OutputSignal>,
     state: Arc<RwLock<AgentState>>,
+    watchdog: Arc<RwLock<WatchdogState>>,
     _master: Box<dyn MasterPty + Send>,
     _reader_handle: tokio::task::JoinHandle<()>,
     _writer_handle: tokio::task::JoinHandle<()>,
@@ -98,9 +100,20 @@ impl PtySession {
             None
         };
 
+        // Per-agent watchdog: rolling last_output_at + stalled flag.
+        // Thresholds come from the spec when provided, else defaults.
+        let watchdog = Arc::new(RwLock::new(WatchdogState::new(
+            config.watchdog.unwrap_or_default(),
+        )));
+
         // Start the state tracker.
         let state_tracker_rx = output_tx.subscribe();
-        let state_tracker_handle = spawn_state_tracker(state_tracker_rx, state.clone());
+        let state_tracker_handle = spawn_state_tracker(
+            state_tracker_rx,
+            state.clone(),
+            watchdog.clone(),
+            config.id.0.clone(),
+        );
 
         // Inject setup commands.
         let setup_tx = input_tx.clone();
@@ -141,12 +154,21 @@ impl PtySession {
             input_tx,
             output_tx,
             state,
+            watchdog,
             _master: pair.master,
             _reader_handle: reader_handle,
             _writer_handle: writer_handle,
             _transcript_handle: transcript_handle,
             _state_tracker_handle: state_tracker_handle,
         })
+    }
+
+    /// Handle to the agent's rolling watchdog state. Readers see the
+    /// `last_output_at`, `stalled`, and `running_since` timestamps
+    /// the state tracker maintains. The `/state` endpoint and step
+    /// 6's action layer both consume this.
+    pub fn watchdog(&self) -> Arc<RwLock<WatchdogState>> {
+        self.watchdog.clone()
     }
 
     /// The agent ID for this session.

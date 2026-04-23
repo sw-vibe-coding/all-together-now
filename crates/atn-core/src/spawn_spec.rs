@@ -9,6 +9,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::watchdog::WatchdogConfig;
+
 /// How the PTY reaches the agent process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +68,9 @@ pub struct SpawnSpec {
     /// Optional free-form args appended to the agent command.
     #[serde(default)]
     pub agent_args: Option<String>,
+    /// Optional per-agent watchdog thresholds. Defaults apply when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watchdog: Option<WatchdogConfig>,
 }
 
 fn default_role() -> String {
@@ -210,6 +215,7 @@ mod tests {
             project: None,
             agent: "claude".to_string(),
             agent_args: None,
+            watchdog: None,
         }
     }
 
@@ -224,6 +230,7 @@ mod tests {
             project: Some("hlasm".to_string()),
             agent: "codex".to_string(),
             agent_args: None,
+            watchdog: None,
         }
     }
 

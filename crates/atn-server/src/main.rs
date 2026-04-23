@@ -74,6 +74,13 @@ struct AgentInfo {
     name: String,
     role: String,
     state: AgentState,
+    /// Watchdog flag — `true` when the agent is `running` but has been
+    /// quiet longer than the configured stall threshold.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    stalled: bool,
+    /// Seconds since the stall was first flagged. `None` if not stalled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stalled_for_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     spec: Option<SpawnSpec>,
     /// The actual shell command the PTY runs (derived from spec for new-dialog
@@ -367,6 +374,7 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
                         session.name().to_string(),
                         session.role().to_string(),
                         session.state(),
+                        session.watchdog(),
                     )
                 })
             })
@@ -375,18 +383,25 @@ async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> {
     let specs = state.agent_specs.lock().await.clone();
     let configs = state.agent_configs.lock().await.clone();
     let mut agents = Vec::with_capacity(pending.len());
-    for (id, name, role, state_lock) in pending {
+    for (id, name, role, state_lock, watchdog_lock) in pending {
         let s = state_lock.read().await;
         let spec = specs.get(&id).cloned();
         let launch_command = configs
             .get(&id)
             .map(|c| c.launch_command.clone())
             .filter(|s| !s.is_empty());
+        let (stalled, stalled_for_secs) = {
+            let w = watchdog_lock.read().await;
+            let now = std::time::Instant::now();
+            (w.stalled, w.stalled_for_secs(now))
+        };
         agents.push(AgentInfo {
             id,
             name,
             role,
             state: s.clone(),
+            stalled,
+            stalled_for_secs,
             spec,
             launch_command,
         });
@@ -449,7 +464,7 @@ async fn agent_state(
     State(state): State<AppState>,
 ) -> Result<Json<AgentInfo>, StatusCode> {
     let agent_id = AgentId(id);
-    let (name, role, state_lock) = {
+    let (name, role, state_lock, watchdog_lock) = {
         let mgr = state.manager.lock().await;
         let session = mgr
             .get_session(&agent_id)
@@ -458,6 +473,7 @@ async fn agent_state(
             session.name().to_string(),
             session.role().to_string(),
             session.state(),
+            session.watchdog(),
         )
     };
     let s = state_lock.read().await;
@@ -469,11 +485,18 @@ async fn agent_state(
         .get(&agent_id.0)
         .map(|c| c.launch_command.clone())
         .filter(|s| !s.is_empty());
+    let (stalled, stalled_for_secs) = {
+        let w = watchdog_lock.read().await;
+        let now = std::time::Instant::now();
+        (w.stalled, w.stalled_for_secs(now))
+    };
     Ok(Json(AgentInfo {
         id: agent_id.0,
         name,
         role,
         state: s.clone(),
+        stalled,
+        stalled_for_secs,
         spec,
         launch_command,
     }))
@@ -853,6 +876,7 @@ async fn create_agent(
         role,
         setup_commands: Vec::new(),
         launch_command: launch_command.clone(),
+        watchdog: spec.watchdog,
     };
 
     {
@@ -905,6 +929,10 @@ async fn create_agent(
             name: display_name,
             role: format!("{:?}", config.role).to_lowercase(),
             state: current_state,
+            // Freshly created agent: watchdog hasn't seen any output
+            // yet, so it's definitionally not stalled.
+            stalled: false,
+            stalled_for_secs: None,
             spec: Some(spec),
             launch_command: Some(launch_command),
         }),

@@ -4,4 +4,5 @@ pub mod session;
 pub mod snapshot;
 pub mod state_tracker;
 pub mod transcript;
+pub mod watchdog;
 pub mod writer;

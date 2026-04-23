@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::event::PushEvent;
+use crate::watchdog::WatchdogConfig;
 
 /// Unique identifier for an agent session.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -39,6 +40,10 @@ pub struct AgentConfig {
     pub role: AgentRole,
     pub setup_commands: Vec<String>,
     pub launch_command: String,
+    /// Per-agent watchdog thresholds. `None` = use defaults (60s stall,
+    /// no max-running ceiling). Populated from `SpawnSpec.watchdog`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watchdog: Option<WatchdogConfig>,
 }
 
 /// Current state of an agent session.
@@ -86,6 +91,7 @@ mod tests {
             role: AgentRole::Developer,
             setup_commands: vec!["cd /tmp".to_string()],
             launch_command: "claude".to_string(),
+            watchdog: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();

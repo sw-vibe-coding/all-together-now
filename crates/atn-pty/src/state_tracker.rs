@@ -8,7 +8,13 @@ use tokio::time::Instant;
 use atn_core::agent::AgentState;
 use atn_core::event::OutputSignal;
 
+use crate::watchdog::WatchdogState;
+
 const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the tracker polls the watchdog when the PTY is silent.
+/// Short enough that `stalled_for_secs` in the state endpoint stays
+/// close to real time, long enough to be cheap.
+const WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PROMPT_MARKER: &[u8] = b"__ATN_READY__>";
 /// Claude Code displays a question mark or "?" prompt patterns when awaiting input.
 const QUESTION_MARKERS: &[&[u8]] = &[b"? ", b"(y/n)", b"[Y/n]", b"[y/N]"];
@@ -23,11 +29,20 @@ const QUESTION_MARKERS: &[&[u8]] = &[b"? ", b"(y/n)", b"[Y/n]", b"[y/N]"];
 pub fn spawn_state_tracker(
     mut rx: broadcast::Receiver<OutputSignal>,
     state: Arc<RwLock<AgentState>>,
+    watchdog: Arc<RwLock<WatchdogState>>,
+    agent_id: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_output = Instant::now();
 
         loop {
+            // Pick the sooner of (a) the IDLE_TIMEOUT deadline and
+            // (b) a watchdog-poll tick so stall detection runs at
+            // 1-second granularity regardless of PTY traffic.
+            let watchdog_tick = Instant::now() + WATCHDOG_POLL_INTERVAL;
+            let idle_deadline = last_output + IDLE_TIMEOUT;
+            let next_tick = watchdog_tick.min(idle_deadline);
+
             tokio::select! {
                 result = rx.recv() => {
                     match result {
@@ -36,34 +51,45 @@ pub fn spawn_state_tracker(
                             let new_state = classify_output(data);
                             let mut s = state.write().await;
                             // Only update if still in a trackable state
+                            let prev = s.clone();
                             match *s {
                                 AgentState::Starting
                                 | AgentState::Running
                                 | AgentState::Idle
                                 | AgentState::AwaitingHumanInput => {
-                                    *s = new_state;
+                                    *s = new_state.clone();
                                 }
                                 _ => {}
                             }
+                            drop(s);
+                            update_watchdog_on_output(&watchdog, last_output.into_std(), &prev, &new_state).await;
                         }
                         Ok(OutputSignal::PromptReady) => {
                             let mut s = state.write().await;
                             *s = AgentState::Idle;
+                            drop(s);
+                            watchdog.write().await.on_leaving_running();
                         }
                         Ok(OutputSignal::QuestionDetected { .. }) => {
                             let mut s = state.write().await;
                             *s = AgentState::AwaitingHumanInput;
+                            drop(s);
+                            watchdog.write().await.on_leaving_running();
                         }
                         Ok(OutputSignal::IdleDetected) => {
                             let mut s = state.write().await;
                             if *s == AgentState::Running {
                                 *s = AgentState::Idle;
+                                drop(s);
+                                watchdog.write().await.on_leaving_running();
                             }
                         }
                         Ok(OutputSignal::PushEvent(_)) => {}
                         Ok(OutputSignal::Disconnected) => {
                             let mut s = state.write().await;
                             *s = AgentState::Disconnected;
+                            drop(s);
+                            watchdog.write().await.on_leaving_running();
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             tracing::debug!("State tracker lagged by {n} messages");
@@ -71,15 +97,53 @@ pub fn spawn_state_tracker(
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                _ = tokio::time::sleep_until(last_output + IDLE_TIMEOUT) => {
-                    let mut s = state.write().await;
-                    if *s == AgentState::Running {
-                        *s = AgentState::Idle;
+                _ = tokio::time::sleep_until(next_tick) => {
+                    // Idle-detection: long gap in Running → Idle.
+                    let now = Instant::now();
+                    if now >= idle_deadline {
+                        let mut s = state.write().await;
+                        if *s == AgentState::Running {
+                            *s = AgentState::Idle;
+                            drop(s);
+                            watchdog.write().await.on_leaving_running();
+                            continue;
+                        }
+                    }
+                    // Stall check: state is still Running but the
+                    // PTY has been quiet long enough to cross
+                    // `stall_secs`. One-shot per stall event so the
+                    // log doesn't spam.
+                    let cur_state = state.read().await.clone();
+                    let mut w = watchdog.write().await;
+                    if w.check_stall(now.into_std(), &cur_state) {
+                        tracing::warn!(
+                            "agent {agent_id} stalled: no output for {}s while running",
+                            w.config.stall_secs
+                        );
                     }
                 }
             }
         }
     })
+}
+
+async fn update_watchdog_on_output(
+    watchdog: &Arc<RwLock<WatchdogState>>,
+    now: std::time::Instant,
+    prev_state: &AgentState,
+    next_state: &AgentState,
+) {
+    let mut w = watchdog.write().await;
+    w.on_output(now);
+    // Track Running-window entry/exit so max_running_secs (step 6)
+    // has a start time.
+    let was_running = matches!(prev_state, AgentState::Running);
+    let is_running = matches!(next_state, AgentState::Running);
+    match (was_running, is_running) {
+        (false, true) => w.on_entering_running(now),
+        (true, false) => w.on_leaving_running(),
+        _ => {}
+    }
 }
 
 /// Classify raw PTY output bytes into an agent state.

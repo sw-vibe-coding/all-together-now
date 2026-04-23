@@ -76,6 +76,7 @@ impl AgentEntry {
             Some(spec) => spec.compose_command(),
             None => self.launch_command.clone(),
         };
+        let watchdog = self.spec.as_ref().and_then(|s| s.watchdog);
         AgentConfig {
             id: AgentId(self.id.clone()),
             name: self.name.clone(),
@@ -83,6 +84,7 @@ impl AgentEntry {
             role: self.role.clone(),
             setup_commands: self.setup_commands.clone(),
             launch_command,
+            watchdog,
         }
     }
 }
@@ -238,6 +240,7 @@ agent = "codex"
                 project: Some("hlasm".to_string()),
                 agent: "codex".to_string(),
                 agent_args: None,
+                watchdog: None,
             }
         );
     }

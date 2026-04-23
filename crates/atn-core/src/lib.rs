@@ -7,3 +7,4 @@ pub mod inbox;
 pub mod router;
 pub mod shell;
 pub mod spawn_spec;
+pub mod watchdog;
