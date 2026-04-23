@@ -88,3 +88,17 @@ Shared wiki for inter-agent coordination. Agents read and write pages to exchang
 Two-column event log: outbound (Coordinator to Agents) on the left, inbound (Agents to Coordinator) on the right.
 
 ![Events view](images/screenshot-events.png?ts=1776016434792)
+
+## Links
+
+- Blog: [Software Wrighter Lab](https://software-wrighter-lab.github.io/)
+- Discord: [Join the community](https://discord.com/invite/Ctzk5uHggZ)
+- YouTube: [Software Wrighter](https://www.youtube.com/@SoftwareWrighter)
+
+## Copyright
+
+Copyright (c) 2026 Michael A. Wright
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for the full text.
