@@ -259,6 +259,7 @@ async fn main() {
             axum::routing::put(update_agent).delete(delete_agent),
         )
         .route("/api/agents/{id}/sse", get(agent_sse))
+        .route("/api/agents/{id}/screenshot", get(agent_screenshot))
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
         .route("/api/agents/{id}/resize", post(agent_resize))
@@ -500,6 +501,107 @@ async fn agent_sse(
         });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[derive(Deserialize)]
+struct ScreenshotParams {
+    #[serde(default = "default_screenshot_format")]
+    format: String,
+    #[serde(default = "default_screenshot_rows")]
+    rows: usize,
+    #[serde(default = "default_screenshot_cols")]
+    cols: usize,
+}
+
+fn default_screenshot_format() -> String {
+    "text".to_string()
+}
+fn default_screenshot_rows() -> usize {
+    40
+}
+fn default_screenshot_cols() -> usize {
+    120
+}
+
+/// GET /api/agents/{id}/screenshot — return a rendered terminal
+/// snapshot built from the tail of the agent's transcript. Delegates
+/// parsing to `atn_pty::snapshot`; this handler just plumbs the
+/// query-string format + size into the right Content-Type and body.
+async fn agent_screenshot(
+    Path(id): Path<String>,
+    Query(params): Query<ScreenshotParams>,
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, String)> {
+    // Validate format before touching the filesystem — this path is
+    // trivially cachable on a bad-request retry.
+    let format = params.format.to_ascii_lowercase();
+    match format.as_str() {
+        "text" | "ansi" | "html" => {}
+        other => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("unknown format '{other}'; expected one of text|ansi|html"),
+            ));
+        }
+    };
+
+    // Clamp geometry. vt100 panics on zero; huge values would read a
+    // pathological chunk of the transcript.
+    let rows = params.rows.clamp(1, 500);
+    let cols = params.cols.clamp(1, 500);
+
+    // Confirm the agent exists (404 before we go to disk) and capture
+    // the log_dir the manager was started with.
+    let transcript_path = {
+        let mgr = state.manager.lock().await;
+        let _session = mgr
+            .get_session(&AgentId(id.clone()))
+            .map_err(|_| (StatusCode::NOT_FOUND, format!("agent '{id}' not found")))?;
+        let log_dir = mgr.log_dir().map(std::path::Path::to_path_buf);
+        log_dir.map(|dir| dir.join(&id).join("transcript.log"))
+    };
+
+    // Read the tail of the transcript (or an empty buffer if logging
+    // was disabled for this session / the file hasn't flushed yet).
+    let bytes = match transcript_path {
+        Some(path) => read_transcript_tail(&path, rows, cols).await,
+        None => Vec::new(),
+    };
+
+    let snap = atn_pty::snapshot::snapshot_from_bytes(&bytes, rows, cols);
+    let (content_type, body) = match format.as_str() {
+        "text" => ("text/plain; charset=utf-8", snap.render_text()),
+        // ANSI is also `text/plain`; it contains raw SGR escape codes
+        // and is meant to be piped into another terminal.
+        "ansi" => ("text/plain; charset=utf-8", snap.render_ansi()),
+        "html" => ("text/html; charset=utf-8", snap.render_html()),
+        _ => unreachable!("validated above"),
+    };
+
+    Ok(([(axum::http::header::CONTENT_TYPE, content_type)], body).into_response())
+}
+
+async fn read_transcript_tail(path: &std::path::Path, rows: usize, cols: usize) -> Vec<u8> {
+    // Keep enough bytes to fully reconstruct a rows×cols screen even
+    // with modest ANSI-escape overhead. Empirically ~8× the cell count
+    // is comfortable; cap the read at 256 KiB to bound memory.
+    let want = (rows * cols).saturating_mul(8).min(256 * 1024);
+    let Ok(metadata) = tokio::fs::metadata(path).await else {
+        return Vec::new();
+    };
+    let len = metadata.len();
+    let start = len.saturating_sub(want as u64);
+
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return Vec::new();
+    };
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+    if file.seek(SeekFrom::Start(start)).await.is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    let _ = file.read_to_end(&mut buf).await;
+    buf
 }
 
 async fn agent_input(

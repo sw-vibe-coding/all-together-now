@@ -87,4 +87,11 @@ impl SessionManager {
     pub fn is_empty(&self) -> bool {
         self.sessions.is_empty()
     }
+
+    /// The log directory this manager writes transcripts under, if any.
+    /// Callers (e.g. the screenshot HTTP endpoint) use this to locate
+    /// `{log_dir}/{agent_id}/transcript.log`.
+    pub fn log_dir(&self) -> Option<&std::path::Path> {
+        self.log_dir.as_deref()
+    }
 }

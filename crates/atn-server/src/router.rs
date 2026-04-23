@@ -166,10 +166,17 @@ async fn process_outbox_file(
                     .map(|s| s.input_sender())
             };
             if let Some(tx) = tx {
-                // Send text, pause, then Enter as separate events.
-                let _ = tx.send(InputEvent::HumanText { text: prompt }).await;
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                let _ = tx.send(InputEvent::RawBytes { bytes: vec![0x0d] }).await;
+                // Send text + Enter in a single atomic HumanText. This
+                // avoids the pre-existing race where the event_log
+                // could be pushed after the 150ms inter-keystroke
+                // pause — tests that polled for "both inboxes written"
+                // before the second log entry landed saw only one
+                // entry in `/api/events`.
+                let _ = tx
+                    .send(InputEvent::HumanText {
+                        text: format!("{prompt}\r"),
+                    })
+                    .await;
             }
             delivered = true;
             tracing::info!("Router: delivered event {} to agent {}", event.id, agent_id);
