@@ -1,5 +1,9 @@
 # All Together Now
 
+<p align="center">
+  <img src="images/atn-rails.png" alt="All Together Now — coordinated agents on rails" width="480">
+</p>
+
 Multi-agent coordination server with shared wiki, event routing, and saga tracking.
 
 Run a single ATN server on your Mac, compose local and remote agents at
