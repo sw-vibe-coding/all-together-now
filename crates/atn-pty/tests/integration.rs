@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use atn_core::agent::{AgentConfig, AgentId, AgentRole, AgentState};
-use atn_core::event::{InputEvent, OutputSignal};
+use atn_core::event::{CannedAction, InputEvent, OutputSignal};
 use atn_pty::session::PtySession;
 
 fn test_config(tmp: &std::path::Path) -> AgentConfig {
@@ -399,4 +399,103 @@ name = "empty-start-test"
     }
     assert!(mgr.is_empty());
     assert_eq!(mgr.len(), 0);
+}
+
+// --- Canned-action shell-escape regression tests (ops-polish step 1) ---
+//
+// These verify that CannedAction::ReadWiki / Ack pass their page + id
+// arguments through `atn_core::shell::shell_escape` before the line hits
+// the PTY. Without escaping, `(priority: High)` triggers a bash parser
+// error because `(` starts a subshell. With escaping, bash sees a single
+// quoted word and tries to run `coord` (which fails with a normal
+// "command not found", no syntax error).
+
+/// Drain the output channel for `window`, return everything seen. Used
+/// by the regression tests below — they need the full post-action
+/// buffer rather than an early exit on the first prompt marker.
+async fn drain_output(
+    mut rx: tokio::sync::broadcast::Receiver<OutputSignal>,
+    window: Duration,
+) -> String {
+    let mut collected = String::new();
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(OutputSignal::Bytes(data))) => {
+                if let Ok(s) = std::str::from_utf8(&data) {
+                    collected.push_str(s);
+                }
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+    collected
+}
+
+#[tokio::test]
+async fn canned_read_wiki_quotes_metacharacters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config(tmp.path());
+    let mut session = PtySession::spawn(&config, None).unwrap();
+    // Let bash finish the initial `export PS1=...` setup so its echo
+    // doesn't land in the buffer we're about to inspect.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let rx = session.output_receiver();
+
+    // The canonical regression case: parens + colon + spaces.
+    session
+        .send_input(InputEvent::Action {
+            action: CannedAction::ReadWiki {
+                page: "Requests (priority: High)".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let output = drain_output(rx, Duration::from_secs(2)).await;
+    assert!(
+        !output.contains("syntax error"),
+        "bash should not have parsed the parens as a subshell; got: {output}"
+    );
+    assert!(
+        output.contains("coord: command not found") || output.contains("coord: not found"),
+        "expected bash to try to run `coord` as a single word; got: {output}"
+    );
+    session.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn canned_ack_quotes_single_quotes() {
+    // request_id that itself contains a single quote. Without the
+    // `'\''` dance the shell would see an unterminated quoted string.
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config(tmp.path());
+    let mut session = PtySession::spawn(&config, None).unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let rx = session.output_receiver();
+
+    session
+        .send_input(InputEvent::Action {
+            action: CannedAction::Ack {
+                request_id: "REQ-can't-touch-this".to_string(),
+            },
+        })
+        .await
+        .unwrap();
+
+    let output = drain_output(rx, Duration::from_secs(2)).await;
+    assert!(
+        !output.contains("syntax error") && !output.contains("unexpected EOF"),
+        "shell should handle quoted single-quote cleanly; got: {output}"
+    );
+    assert!(
+        output.contains("coord: command not found") || output.contains("coord: not found"),
+        "expected bash to try to run `coord` as a single word; got: {output}"
+    );
+    session.shutdown().await.unwrap();
 }

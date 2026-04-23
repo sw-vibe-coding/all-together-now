@@ -122,7 +122,6 @@ Cargo workspace with 7 crates (library-first design):
 
 ## Known Issues
 
-- ATN notification `(priority: High)` causes bash syntax error (unquoted parentheses)
 - State tracking timing is fragile for programmatic task completion detection
 
 ## Upstream Projects

@@ -5,4 +5,5 @@ pub mod error;
 pub mod event;
 pub mod inbox;
 pub mod router;
+pub mod shell;
 pub mod spawn_spec;
