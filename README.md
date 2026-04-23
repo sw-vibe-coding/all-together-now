@@ -1,7 +1,7 @@
 # All Together Now
 
 <p align="center">
-  <img src="images/atn-rails.png" alt="All Together Now — coordinated agents on rails" width="480">
+  <img src="images/block-switchyard.png" alt="All Together Now — block switchyard" width="480">
 </p>
 
 Multi-agent coordination server with shared wiki, event routing, and saga tracking.
