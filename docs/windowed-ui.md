@@ -44,14 +44,15 @@ stay in the bottom dock.
 
 ## Per-window chrome
 
-| Icon | Action                                     |
-|------|--------------------------------------------|
-| `_`  | **Minimize** to the bottom dock            |
-| `□`  | **Maximize** to ~80% × 90% (toggle)        |
-| `📌` | **Pin / unpin** — lock the current rect    |
-| `▸`  | **Config** — inline spec editor            |
-| `↻`  | **Reconnect** — hard re-attach (mosh+tmux) |
-| `✕`  | **Delete** — tear the agent down           |
+| Icon | Action                                                                             |
+|------|------------------------------------------------------------------------------------|
+| `_`  | **Minimize** to the bottom dock                                                    |
+| `□`  | **Maximize** to ~80% × 90% (toggle)                                                |
+| `📌` | **Pin / unpin** — lock the current rect                                            |
+| `▸`  | **Config** — inline spec editor                                                    |
+| `📸` | **Snapshot** — open a rendered terminal text snapshot in a new tab                 |
+| `↻`  | **Reconnect** — hard re-attach (mosh+tmux)                                         |
+| `✕`  | **Delete** — tear the agent down                                                   |
 
 Clicking anywhere on the header (not on an icon) **selects** the
 window. Selected = accent green outline + target of bare-key shortcuts.

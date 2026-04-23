@@ -825,6 +825,14 @@
                 });
         }
 
+        // Open a rendered terminal snapshot in a new browser tab. Same
+        // URL the chrome 📸 button fires; also exposed on `window` so
+        // it can be driven from devtools.
+        function snapshotAgent(id) {
+            const url = `${API_BASE}/api/agents/${encodeURIComponent(id)}/screenshot?format=text&rows=40&cols=120`;
+            window.open(url, '_blank', 'noopener');
+        }
+
         // Single delegated click listener for everything inside an
         // agent panel's header: icon buttons + header body click.
         document.addEventListener('click', (e) => {
@@ -857,6 +865,7 @@
                     case 'maximize': windowMaximizeToggle(id); break;
                     case 'pin':      togglePin(id); break;
                     case 'config':   toggleConfig(id); break;
+                    case 'snapshot': snapshotAgent(id); break;
                     case 'reconnect': reconnectAgent(id); break;
                     case 'delete':   confirmDelete(id); break;
                 }
@@ -2508,6 +2517,7 @@
                         <button class="btn-icon btn-max" data-window-action="maximize" data-window-id="${agent.id}" title="Maximize / restore (M)">□</button>
                         <button class="btn-icon btn-pin" data-window-action="pin" data-window-id="${agent.id}" title="Pin (p)">📌</button>
                         <button class="btn-icon btn-cfg" data-window-action="config" data-window-id="${agent.id}" title="Config">▸</button>
+                        <button class="btn-icon btn-snap" data-window-action="snapshot" data-window-id="${agent.id}" title="Snapshot terminal (opens in new tab)">📸</button>
                         <button class="btn-icon btn-rc" data-window-action="reconnect" data-window-id="${agent.id}" title="Reconnect">↻</button>
                         <button class="btn-icon btn-delete" data-window-action="delete" data-window-id="${agent.id}" title="Delete">✕</button>
                     </span>
@@ -2919,6 +2929,7 @@
             window.squarify = squarify;
             window.enableTreemapMode = enableTreemapMode;
             window.togglePin = togglePin;
+            window.snapshotAgent = snapshotAgent;
             window.saveLayoutPrefs = saveLayoutPrefs;
             window.atnDebug = atnDebug;
         }
