@@ -1,0 +1,13 @@
+number = 3
+slug = "pty-screenshot-endpoint"
+status = "completed"
+description = """
+## Step 3: /api/agents/{id}/screenshot HTTP endpoint
+
+Expose the terminal sna..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T20:39:56"
+completed_at = "2026-04-23T12:50:51"
+task_type = "axum-sse-server"
+commits = ["8959dfb5f8f9c08c88d57b4881758f8831fe1825"]

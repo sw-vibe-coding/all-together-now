@@ -1,0 +1,12 @@
+number = 6
+slug = "agentrail-ui"
+status = "completed"
+description = """
+## Phase 6: Agentrail Integration
+
+Per-agent workflow tracking with ICRL inje..."""
+role = "production"
+context_files = []
+created_at = "2026-03-29T16:42:25"
+completed_at = "2026-03-29T19:38:40"
+task_type = "yew-component"

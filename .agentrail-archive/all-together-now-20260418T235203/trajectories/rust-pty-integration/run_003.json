@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-pty-integration",
+  "state": {
+    "number": 8,
+    "step": "spec-toml-roundtrip"
+  },
+  "action": "Added spec field to AgentEntry in atn-core/src/config.rs with skip_serializing_if=Option::is_none; to_agent_config now prefers spec.compose_command(). Startup loader in main.rs populates agent_specs_map from entries. save_config pulls specs from state and writes them, blanking launch_command when a spec is present. Added spec_roundtrips_through_toml and entries_without_spec_omit_the_field_when_serialized tests. Updated agent_entry_to_config_relative_path/absolute_path tests to include spec: None. 29 atn-core tests + 52 workspace tests green; clippy --all-targets clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-18T20:47:04"
+}

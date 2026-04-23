@@ -1,0 +1,1 @@
+Hot-reload watcher (spawn_config_watcher) updates agent_configs + agent_repo_paths on edits to agents.toml but never touches agent_specs. Edits that add `[agent.spec]` subtables or remove agents with specs leave state.agent_specs stale. Sync agent_specs during hot-reload: add specs from new entries, drop specs for removed agents.

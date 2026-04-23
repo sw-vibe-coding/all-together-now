@@ -1,0 +1,12 @@
+number = 8
+slug = "session-mgmt-ui"
+status = "completed"
+description = """
+## Phase 8: Session Management UI
+
+Full agent lifecycle control from the browser — create, configure, start, stop, and destroy agents without editing TOML."""
+role = "production"
+context_files = []
+created_at = "2026-03-29T18:30:00"
+completed_at = "2026-03-30T08:49:03"
+task_type = "yew-component"

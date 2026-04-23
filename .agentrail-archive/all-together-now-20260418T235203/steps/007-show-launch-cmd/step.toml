@@ -1,0 +1,10 @@
+number = 7
+slug = "show-launch-cmd"
+status = "completed"
+description = "Surface the composed launch_command in the static dashboard agent header as a..."
+role = "production"
+context_files = []
+created_at = "2026-04-18T20:18:49"
+completed_at = "2026-04-18T20:20:45"
+task_type = "yew-component"
+commits = ["318c6deb67a643c9f436066a56b4c87bb70b5602"]

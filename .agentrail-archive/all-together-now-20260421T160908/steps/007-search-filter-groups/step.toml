@@ -1,0 +1,13 @@
+number = 7
+slug = "search-filter-groups"
+status = "completed"
+description = """
+## Step 6: Search, Filter, Groups
+
+Given 20+ agents, a name-only scan gets ol..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-21T12:13:05"
+task_type = "yew-component"
+commits = ["606b51280c1ff31f2ffab2456659c8c484d12306"]

@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 4,
+    "step": "wiki-integration"
+  },
+  "action": "Edit atn-server main.rs with wiki endpoints and SharedState refactor, Edit static index.html with wiki browser JS/CSS, Write wiki.rs Yew component, Edit app.rs with view switching",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-03-29T18:27:16"
+}

@@ -1,0 +1,13 @@
+number = 1
+slug = "priority-escape"
+status = "completed"
+description = """
+## Step 1: Shell-escape fix for coordinator commands
+
+Fix the known issue whe..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T20:39:35"
+completed_at = "2026-04-23T09:58:51"
+task_type = "pre-commit"
+commits = ["5ecf79df5bc7600a3ba5f4f2558fc6b7a779eeea"]

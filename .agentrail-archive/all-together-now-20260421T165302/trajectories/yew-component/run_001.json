@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 1,
+    "step": "config-editor-spawnspec"
+  },
+  "action": "Added spec: Option<SpawnSpec> to UpdateAgentBody. Rewrote update_agent: branches on body.spec; on spec path validates, recomposes launch_command, derives name/role/repo_path, shuts down + respawns, rearms heat, persists new spec. Error shape upgraded to (StatusCode, String). Replaced the static per-panel .agent-config-editor markup with an empty div populated lazily by toggleConfig → renderConfigEditor → configEditorSpecHTML or configEditorLegacyHTML. Added readSpecFromEditor, specMissingFields, specPreview, attachConfigPreview mirroring the New Agent dialog. applyConfig now chooses between spec / legacy body shapes. Live smoke through curl covered create, spec-edit, legacy-edit, 400-on-invalid.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-21T16:31:58"
+}

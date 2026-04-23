@@ -1,0 +1,11 @@
+{
+  "task_type": "axum-sse-server",
+  "state": {
+    "number": 1,
+    "step": "heat-score"
+  },
+  "action": "Wrote crates/atn-server/src/heat.rs. Added mod heat; HeatMap field to SharedState. Added rearm_heat_tracker helper called from create_agent, agent_restart, agent_reconnect. Wired hot-reload to add on spawn + remove on to_remove. GET /api/agents/heat handler takes the write lock and decays each entry to now before reading. Live smoke sequence (empty start / spawn / quiet / pump / delete) showed each behavior.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-20T16:02:43"
+}

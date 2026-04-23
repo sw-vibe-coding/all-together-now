@@ -1,0 +1,13 @@
+number = 3
+slug = "css-scaled-xterm"
+status = "completed"
+description = """
+## Step 3: CSS-Scaled xterm
+
+Render each xterm at a fixed "native" size (120x..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-21T08:14:23"
+task_type = "yew-component"
+commits = ["7572fe763b0195138480340b076af1da1714cad1"]

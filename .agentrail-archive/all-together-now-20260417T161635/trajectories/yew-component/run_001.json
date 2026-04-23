@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 2,
+    "step": "minimal-web-ui"
+  },
+  "action": "Write atn-server main.rs with Axum routes, Write static/index.html with xterm.js SSE client, Write atn-ui Yew components with cfg guards for native/wasm, Create Trunk.toml, Fix Sync issue with Mutex instead of RwLock",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-03-29T17:57:33"
+}

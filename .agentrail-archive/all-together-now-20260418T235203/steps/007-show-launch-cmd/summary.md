@@ -1,0 +1,1 @@
+Agent panel now surfaces the composed launch_command. Hover shows the full command (including mosh/tmux pipeline for remote agents); truncated line under the header shows it at a glance. Self-documents the demo without hitting the API or opening the Config editor. Smoke-tested live; all 52 workspace tests green, clippy clean.

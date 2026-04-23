@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 1,
+    "step": "dialog-coordinator-workers"
+  },
+  "action": "Wrapped user/@/host inputs in #new-remote-only span; updateTransportFields shows/hides. Same treatment with .cfg-spec-remote-${id} in configEditorSpecHTML + attachConfigPreview. readSpawnSpec/readSpecFromEditor null out user/host when transport=local. Added LAST_HOST_KEY localStorage: updateTransportFields prefills; createAgent saves on success. toggleNewAgent focuses #new-name. Live smoke: coord (local) returns null host/user + `cd . && <agent>`; worker (mosh) composes `mosh USER@HOST -- tmux ... cd DIR && <agent>`.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-21T17:09:26"
+}

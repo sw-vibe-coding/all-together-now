@@ -1,0 +1,10 @@
+number = 8
+slug = "spec-toml-roundtrip"
+status = "completed"
+description = "Save-to-TOML currently writes only the flat launch_command; if an agent was c..."
+role = "production"
+context_files = []
+created_at = "2026-04-18T20:39:50"
+completed_at = "2026-04-18T20:47:04"
+task_type = "rust-pty-integration"
+commits = ["a285a1fbb1a0fb765ae1a76f8bf31ff0f03ba974"]

@@ -1,0 +1,1 @@
+Phase 6: Added Saga tab to web UI with step progress timeline, per-agent saga badges, trajectory viewer, skill distill button. Server REST API: GET /api/saga, GET /api/agents/{id}/saga, POST /api/saga/distill. Reader types now Serialize for JSON. CLI wrapper has agentrail_distill. All 32 tests pass, zero clippy warnings.

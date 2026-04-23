@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 4,
+    "step": "carousel-layout"
+  },
+  "action": "Added .carousel-nav/.carousel-btn CSS + HTML (three layout buttons + ◀/▶ nav). computeLayout carousel branch with name-ring + wrap + peek math (peek ~9% viewport width, primary fills center). carouselCycle(delta) walks eligible-ring; setLayoutMode extended to accept 'carousel' + clears lingering maximized state. windowSelect re-layouts when mode==carousel so clicking a header snaps to primary. swap-to-focus handler now also sets selectedId so compact-tile peek clicks promote. Dock-cell click handler gains carousel branch: restore + select + re-layout. updateCarouselNav toggles ◀/▶ visibility on mode change. Verified: mode toggle, ◀/▶ both directions, peek→center, minimized skipped, dock restore+focus, tiled restore.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-22T12:39:35"
+}

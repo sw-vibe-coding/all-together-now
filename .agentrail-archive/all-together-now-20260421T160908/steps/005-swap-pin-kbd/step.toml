@@ -1,0 +1,13 @@
+number = 5
+slug = "swap-pin-kbd"
+status = "completed"
+description = """
+## Step 5: Swap, Pin, Keyboard
+
+User-facing controls for rearranging the tree..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-21T11:03:58"
+task_type = "yew-component"
+commits = ["83c9210a2eb8f85f790714a33b4d1526317ba482"]

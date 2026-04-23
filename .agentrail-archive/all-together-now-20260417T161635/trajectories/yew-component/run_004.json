@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 8,
+    "step": "session-mgmt-ui"
+  },
+  "action": "Edit atn-server main.rs with CRUD+save+stop endpoints and SharedState extensions, Edit static index.html with new-agent form and lifecycle controls, Edit Cargo.toml with toml dependency, cargo fmt across workspace",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-03-30T08:49:03"
+}

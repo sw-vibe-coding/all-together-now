@@ -1,0 +1,1 @@
+Reconnect button added to the per-agent controls in the static dashboard. Closes the step-3 gap where /api/agents/{id}/reconnect shipped but only curl could hit it. Button sits next to Restart with green styling, shows transient Reconnecting/Reconnected/Failed states, and preserves terminal scrollback (tmux re-attach).

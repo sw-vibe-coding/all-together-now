@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 5,
+    "step": "swap-pin-kbd"
+  },
+  "action": "Added .pin-row / .pin-cell / .tile-actions / .btn-pin CSS; pin-row div above dashboard. Introduced PINS_MAX, FOCUS_WIDTHS, LAYOUT_PREFS_KEY and extended layoutState with pins Set + focusSize. Wrote togglePin, renderPinRow, refreshPinCell, syncPinButtons, saveLayoutPrefs, loadLayoutPrefs, isTypingTarget, hottestUnpinned. Added keydown handler for 1-9/0/f/p///Esc. Updated buildLayoutItems/computeLayout to exclude pins and use FOCUS_WIDTHS[focusSize]. Updated global click listener to dispatch togglePin for .btn-pin and skip [data-no-focus]. refreshCompactIfPresent now also refreshes pin cells. Added .btn-pin to the panel template. Hydrated prefs in init before enableTreemapMode. Exposed togglePin + saveLayoutPrefs on window.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-21T11:03:58"
+}

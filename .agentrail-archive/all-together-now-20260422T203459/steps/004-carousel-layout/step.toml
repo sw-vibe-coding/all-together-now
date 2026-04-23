@@ -1,0 +1,13 @@
+number = 4
+slug = "carousel-layout"
+status = "completed"
+description = """
+## Step 4: Carousel Layout
+
+Add the Carousel layout: focused window ~80% cent..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T09:08:37"
+completed_at = "2026-04-22T12:39:35"
+task_type = "yew-component"
+commits = ["eaacf4529d4e8edaa1694aacb5fd35614b5bac7e"]

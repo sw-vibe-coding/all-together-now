@@ -1,0 +1,1 @@
+Phases 0-8 complete: core PTY, UI, multi-agent, wiki, routing, agentrail integration, polish, session-mgmt UI all shipped. New saga covers empty-start + remote-agent demo.

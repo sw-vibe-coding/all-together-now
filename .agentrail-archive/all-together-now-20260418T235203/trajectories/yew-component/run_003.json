@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 7,
+    "step": "show-launch-cmd"
+  },
+  "action": "Added title attribute on .agent-name and a .agent-launch monospace line in the panel template in static/index.html. Escaped double-quotes. Rebuilt server; live smoke confirmed the HTML carries the new markup and GET /api/agents returns the composed command for a mosh-transport agent.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-18T20:20:45"
+}

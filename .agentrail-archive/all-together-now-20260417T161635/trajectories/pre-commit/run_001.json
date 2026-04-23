@@ -1,0 +1,11 @@
+{
+  "task_type": "pre-commit",
+  "state": {
+    "number": 7,
+    "step": "polish-robustness"
+  },
+  "action": "Edit main.rs (shutdown signal, restart handler, dependency graph endpoint, config watcher), Edit session.rs (sync spawn, improved shutdown), Edit manager.rs (drain_all, remove_agent), Edit index.html (Graph tab, restart button, notification sounds), Write docs/usage.md, Write docs/status.md, Update CHANGES.md",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-03-29T20:14:53"
+}

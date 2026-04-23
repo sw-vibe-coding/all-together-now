@@ -1,0 +1,13 @@
+number = 1
+slug = "empty-start"
+status = "completed"
+description = """
+## Step 1: Empty Start
+
+ATN must boot cleanly with zero configured agents. Th..."""
+role = "production"
+context_files = []
+created_at = "2026-04-17T16:33:07"
+completed_at = "2026-04-17T17:14:34"
+task_type = "axum-sse-server"
+commits = ["b2d1aff4601973eb5972b40e48fb0ae8e4e45c9d"]

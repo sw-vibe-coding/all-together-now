@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 3,
+    "step": "stack-layout"
+  },
+  "action": "Added .layout-selector/.layout-btn CSS + HTML buttons in header; new JS helpers pickStackPrimary/enterStackMode/leaveStackMode/stackPromote/setLayoutMode/updateLayoutSelector/setupLayoutSelector; computeLayout stack short-circuit at ~80% viewport with implicit dock; dock-cell click handler routes to stackPromote when layoutMode==='stack'; addAgentPanel defaults new agents to minimized in stack; init calls enterStackMode when persisted layoutMode is stack. Verified: toggling Stack yields 1 normal/2 minimized, dock-click swaps primary, Tiled restores all, persistence round-trips.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-22T12:17:41"
+}

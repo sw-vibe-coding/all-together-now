@@ -1,0 +1,1 @@
+Replaced legacy keyboard handler with Option-C window-manager bindings: m minimize, M maximize/restore, p pin, ←/→ cycle, 1..9 jump, Esc restore-then-deselect. Guarded by isTypingTarget + isXtermFocused. New #kbd-hint strip + per-panel .pty-focus-badge. All bindings verified live.

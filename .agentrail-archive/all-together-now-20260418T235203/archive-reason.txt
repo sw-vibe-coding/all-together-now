@@ -1,0 +1,1 @@
+Remote-agent demo saga + polish follow-ons complete (9 steps). Next sagas will cover LLM-server transport (Ollama etc.) and GPU-backed workers on Arch rack hosts.

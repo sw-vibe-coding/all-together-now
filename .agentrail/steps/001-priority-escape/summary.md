@@ -1,0 +1,1 @@
+Added atn_core::shell::shell_escape (single-quote dance). atn-pty::writer::canned_action_to_bytes now escapes ReadWiki.page and Ack.request_id before formatting coord read/ack lines. 10 table-driven unit tests + 2 integration tests (real bash PTY) cover the fix. docs/status.md known-issue bullet for the parens bug is removed. cargo test + clippy + doc all clean.

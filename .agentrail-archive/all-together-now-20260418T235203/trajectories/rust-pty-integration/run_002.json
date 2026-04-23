@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-pty-integration",
+  "state": {
+    "number": 4,
+    "step": "three-agent-demo"
+  },
+  "action": "Added ATN_PORT parsing and ready marker to main.rs. Wrote tools/fake-{claude,codex,opencode-glm5} bash shims. Created demos/three-agent/{fixtures/*.json,setup.sh}. Wrote tests/three_agent_demo.rs using subprocess spawn + curl (no reqwest dep); added tempfile/chrono/serde_json dev-deps. All 52 workspace tests green; clippy --all-targets clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-18T15:23:00"
+}

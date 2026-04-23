@@ -1,0 +1,11 @@
+{
+  "task_type": "pre-commit",
+  "state": {
+    "number": 1,
+    "step": "priority-escape"
+  },
+  "action": "New crates/atn-core/src/shell.rs with shell_escape(&str)->String using single-quote wrapping + '\\'' escape for interior quotes. Added pub mod shell to atn-core/src/lib.rs. Edited canned_action_to_bytes in atn-pty/src/writer.rs to use shell_escape for ReadWiki.page + Ack.request_id. Added drain_output helper + two regression tests (canned_read_wiki_quotes_metacharacters, canned_ack_quotes_single_quotes) to atn-pty/tests/integration.rs. Removed the priority parens bullet from docs/status.md Known Issues. cargo test workspace green; cargo clippy --workspace -- -D warnings clean; cargo doc --workspace --no-deps warning-free.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T09:58:51"
+}

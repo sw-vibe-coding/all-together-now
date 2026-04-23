@@ -1,0 +1,12 @@
+number = 6
+slug = "windowed-ui-docs"
+status = "completed"
+description = """
+## Step 6: Persistence, Docs, Demo
+
+Final polish: wire localStorage for the n..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T09:08:37"
+completed_at = "2026-04-22T19:04:50"
+commits = ["e006085730ce59b4f80654ebe4270c7de5b5660c"]

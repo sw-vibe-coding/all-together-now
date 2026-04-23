@@ -1,0 +1,12 @@
+number = 6
+slug = "watchdog-actions"
+status = "pending"
+description = """
+## Step 6: Watchdog actions — Ctrl-C, blocked_notice, UI badge
+
+Turn the st..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T20:40:31"
+task_type = "rust-pty-integration"
+commits = []

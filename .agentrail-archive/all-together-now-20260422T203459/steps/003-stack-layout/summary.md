@@ -1,0 +1,1 @@
+Added Tiled/Stack layout toggle in top bar. Stack mode picks primary (selected→coord→first) at 80% of viewport + dock-minimizes everyone else; dock-click promotes; Tiled restore + new-agent-auto-minimize + startup reconcile. Live browser smoke via Playwright against 3-agent demo.

@@ -1,0 +1,1 @@
+Dialog coordinator/workers polish shipped. Next: windowed-UI redesign (desktop metaphor) replacing scale-UI treemap.

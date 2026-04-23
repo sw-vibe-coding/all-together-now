@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 1,
+    "step": "tiled-foundation"
+  },
+  "action": "Added roleOf, COORD_FRAC=0.55, TILE_GAP=4, gridRects(rect, items). Rewrote computeLayout to separate coord and grid workers. Rewrote applyLayout for the {windows} shape. Simplified pickTermScale (no hysteresis). Added layoutMode + sortMode to layoutState + saveLayoutPrefs + loadLayoutPrefs. Left scale-UI helpers (squarify/groupedSquarify/autoPickFocus/FOCUS_WIDTHS) as dead code for step 6 cleanup. Tests + clippy clean; smoke test: 4 fake-shim agents laid out coord-left + 3 workers tiled right.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-22T09:33:33"
+}

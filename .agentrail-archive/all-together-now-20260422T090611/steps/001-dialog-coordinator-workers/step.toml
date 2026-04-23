@@ -1,0 +1,15 @@
+number = 1
+slug = "dialog-coordinator-workers"
+status = "completed"
+description = """
+## Step 1: Dialog flows for coordinator + workers
+
+### Deliverables
+
+1. Stati..."""
+role = "production"
+context_files = []
+created_at = "2026-04-21T16:53:36"
+completed_at = "2026-04-21T17:09:26"
+task_type = "yew-component"
+commits = ["fafa3afa9cf32783062acbed2dd63d18981c8f6a"]

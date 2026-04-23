@@ -1,0 +1,12 @@
+number = 2
+slug = "minimal-web-ui"
+status = "completed"
+description = """
+## Phase 2: Minimal Web UI
+
+Build one agent panel in the browser with streami..."""
+role = "production"
+context_files = []
+created_at = "2026-03-29T16:41:11"
+completed_at = "2026-03-29T17:57:33"
+task_type = "yew-component"

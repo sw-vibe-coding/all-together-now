@@ -1,0 +1,11 @@
+{
+  "task_type": "axum-sse-server",
+  "state": {
+    "number": 3,
+    "step": "pty-screenshot-endpoint"
+  },
+  "action": "Added ScreenshotParams query struct + default helpers. agent_screenshot validates format (400 on bogus), clamps geometry 1..=500, 404s unknown id, reads transcript tail via read_transcript_tail (len - min(rows*cols*8, 256KiB)), renders via atn_pty::snapshot, returns Response with correct Content-Type. Registered route /api/agents/{id}/screenshot GET. New SessionManager::log_dir() accessor. New tests/screenshot_endpoint.rs boots a fresh atn-server on ephemeral port with tools/ on PATH, spawns fake-claude, poll_until banner lands, then cycles through text default + explicit + html + ansi + bad format (400) + unknown id (404). Drive-by: collapsed process_outbox_file's text-then-sleep-then-enter into a single HumanText(text + '\\r') so event_log push no longer races with the test's both-inboxes poll. Full cargo test --workspace passes, clippy + doc clean, three_agent_demo soak 5/5.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T12:50:51"
+}

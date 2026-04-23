@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 2,
+    "step": "window-chrome"
+  },
+  "action": "Added .agent-panel.selected/.btn-icon/.window-dock/.dock-cell CSS. Added #window-dock div after #dashboard. layoutState.windows + selectedId + ensureWindow/windowState/hasMaximized helpers. Panel header template swapped from single pin button to the six-icon chrome row with data-window-action. Delegated click dispatcher for dock-cell / btn-icon / .agent-header[data-window-id]. windowMinimize/MaximizeToggle/Restore/Select + fitSelectedTerm + confirmDelete + reconnectAgent handlers. computeLayout extended: maximized short-circuits to 80% centered + implicit dock; minimized excluded from normal layout. applyLayout writes .selected class + calls renderWindowDock. renderWindowDock rebuilds cells per minimized agent. escapeHTML helper added.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-22T09:43:52"
+}

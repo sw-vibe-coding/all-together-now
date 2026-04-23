@@ -1,0 +1,1 @@
+Empty-start: ProjectConfig.agents now #[serde(default)], agents.toml emptied with seed preserved as agents.example.toml, Yew UI + static dashboard grew a dedicated empty-state with a '+ New Agent' CTA (stub alert), and empty_start_loads_zero_agents integration test green. Server verified to boot with 0 agents and /api/agents returning [].

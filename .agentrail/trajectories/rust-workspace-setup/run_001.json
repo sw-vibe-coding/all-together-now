@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-workspace-setup",
+  "state": {
+    "number": 2,
+    "step": "pty-screenshot-core"
+  },
+  "action": "Hoisted vt100='0.15' into workspace.dependencies; added vt100 to atn-pty/Cargo.toml; atn-replay/Cargo.toml now references workspace vt100. New crates/atn-pty/src/snapshot.rs with Color enum (mirrors vt100::Color), Cell struct with style fields, CellRow, TerminalSnapshot. snapshot_from_bytes clamps rows/cols to ≥1. render_text strips style + trims trailing spaces. render_ansi emits SGR + per-row reset; maps Idx 0..7 to 30-37, 8..15 to 90-97, 16..255 to 38;5;i, Rgb to 38;2;r;g;b (same for bg). render_html emits one <pre> with inline-styled <span> runs; same_style coalescer + html_escape + ansi_idx_to_css (16 basic + 6×6×6 cube + greyscale ramp). Added pub mod snapshot to atn-pty/src/lib.rs. 11 unit tests all passing. cargo test --workspace green (three_agent flake unrelated), clippy + doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T10:21:50"
+}

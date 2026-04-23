@@ -1,0 +1,13 @@
+number = 3
+slug = "remote-pty-transport"
+status = "completed"
+description = """
+## Step 3: Remote PTY Transport
+
+Teach the PTY subsystem to run composed `mos..."""
+role = "production"
+context_files = []
+created_at = "2026-04-17T16:33:12"
+completed_at = "2026-04-18T11:13:53"
+task_type = "rust-pty-integration"
+commits = ["c07b25a4e727141edb8e2f5dcdae161ea9577f06"]

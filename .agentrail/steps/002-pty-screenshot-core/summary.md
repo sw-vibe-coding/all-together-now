@@ -1,0 +1,1 @@
+Added atn_pty::snapshot module: snapshot_from_bytes + TerminalSnapshot with render_text/render_ansi/render_html. Clamps ≥1×1 geometry, 11 unit tests cover cursor-move + clear-screen + color/bold + HTML escape + palette + empty-input + coalescer. Workspace now shares vt100 between atn-pty and atn-replay. No regression in atn-replay rendering.

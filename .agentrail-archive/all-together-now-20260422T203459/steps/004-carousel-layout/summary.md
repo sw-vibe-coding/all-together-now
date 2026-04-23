@@ -1,0 +1,1 @@
+Added Carousel layout mode: focused primary at 80% + prev/next peeks at 9% + ◀/▶ cycle buttons. Peek-click jumps to center; manually-minimized agents skip the cycle and stay in dock. Dock-click restores+focuses in carousel. Verified live via Playwright on 3-agent demo.

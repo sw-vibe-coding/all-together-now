@@ -1,0 +1,12 @@
+number = 5
+slug = "watchdog-core"
+status = "pending"
+description = """
+## Step 5: Per-agent output-stall watchdog
+
+Detect agents that have gone quie..."""
+role = "production"
+context_files = []
+created_at = "2026-04-22T20:40:18"
+task_type = "rust-pty-integration"
+commits = []

@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-pty-integration",
+  "state": {
+    "number": 3,
+    "step": "remote-pty-transport"
+  },
+  "action": "Added OutputSignal::Disconnected; reader.rs emits it once after the read loop; state_tracker.rs maps it to AgentState::Disconnected; transcript.rs serializes it. New PtySession::hard_kill. agent_reconnect handler + route /api/agents/{id}/reconnect. delete_agent looks up SpawnSpec and pre-sends 0x02 + ':kill-session\\r' for remote agents. tools/fake-mosh + symlink trick for tests; three new tokio tests in atn-pty integration; cargo test/clippy green; live curl against running server confirmed 201/200/204 flow.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-18T11:13:53"
+}

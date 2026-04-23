@@ -1,0 +1,1 @@
+Scale-UI saga (S1-S8) shipped: heat score, compact tile, CSS-scaled xterm, treemap, pin/keyboard, demo scripts, filter+groups+saved layouts, 21-agent fleet + docs/scale-ui.md. Demo-ready.

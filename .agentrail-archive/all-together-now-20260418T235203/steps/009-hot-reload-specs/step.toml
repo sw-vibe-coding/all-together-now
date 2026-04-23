@@ -1,0 +1,10 @@
+number = 9
+slug = "hot-reload-specs"
+status = "completed"
+description = "Hot-reload watcher (spawn_config_watcher) updates agent_configs + agent_repo_..."
+role = "production"
+context_files = []
+created_at = "2026-04-18T23:46:48"
+completed_at = "2026-04-18T23:49:25"
+task_type = "axum-sse-server"
+commits = ["5dfeb8faa7d298543f5effa573362ed1a0187897"]

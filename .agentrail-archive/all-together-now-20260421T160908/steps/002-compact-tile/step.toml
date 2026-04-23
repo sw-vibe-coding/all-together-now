@@ -1,0 +1,13 @@
+number = 2
+slug = "compact-tile"
+status = "completed"
+description = """
+## Step 2: Compact Tile
+
+Small-footprint tile variant used whenever an agent'..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-20T21:14:17"
+task_type = "yew-component"
+commits = ["be1e8d308cdb1731549351136a44257372cef85d"]

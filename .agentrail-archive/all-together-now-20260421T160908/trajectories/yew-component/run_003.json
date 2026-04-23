@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 4,
+    "step": "treemap-layout"
+  },
+  "action": "Added treemap-mode CSS + absolute positioning overrides for .agent-panel/.agent-compact + .agent-panel.focus outline. Wrote worstRatio, layoutRow, squarify, testSquarify. Added layoutState, HEAT_SMOOTH_ALPHA, LAYOUT_REFRESH_MS, LAYOUT_FREEZE_MS, FOCUS_MIN/MAX_WIDTH_FRAC, updateSmoothedHeat, autoPickFocus, buildLayoutItems, computeLayout, ensureModeFor, applyLayout, treemapRefreshTick, enableTreemapMode. Tapped pollHeat to call updateSmoothedHeat. Replaced stub swap-to-focus handler with layout logic; added click listener on .agent-header[data-focus-id]. refreshDashboardLayout now calls updateTileScales; addAgentPanel enables treemap-mode on first agent. Exposed layoutState/squarify/enableTreemapMode on window.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-21T09:55:02"
+}

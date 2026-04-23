@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 6,
+    "step": "reconnect-button"
+  },
+  "action": "Added .btn-reconnect CSS, inserted the button between Restart and Stop with an explanatory title tooltip, and wired a click handler that closes the SSE stream before POSTing /reconnect and reopens SSE after 1s. Live smoke against the running server confirmed 200 on the endpoint and the button + CSS + handler all present in the served HTML.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-18T16:42:24"
+}

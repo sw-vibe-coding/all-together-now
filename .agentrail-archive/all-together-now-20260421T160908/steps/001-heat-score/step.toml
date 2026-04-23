@@ -1,0 +1,13 @@
+number = 1
+slug = "heat-score"
+status = "completed"
+description = """
+## Step 1: Heat Score
+
+Server-side "heat" tracking for every agent. Downstrea..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-20T16:02:43"
+task_type = "axum-sse-server"
+commits = ["1600520c515cc3ea544797f511ed90db90462eab"]

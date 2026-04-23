@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 7,
+    "step": "search-filter-groups"
+  },
+  "action": "Added .filter-bar DOM + CSS (chips, group select, layouts dropdown), .group-band overlay CSS, .pin-cell.filtered styling. Wrote matchesFilter, groupItems, groupedSquarify, syncPinFilteredLabels, saveNamedLayout, applyNamedLayout, deleteNamedLayout, refreshSavedLayoutsDropdown, setupFilterBar. Updated pollStates to stash info. Updated buildLayoutItems (filter), computeLayout (groups), applyLayout (hide filter-missed + render bands + call syncPinFilteredLabels). Extended loadLayoutPrefs with filterText/filterChips/groupBy. addAgentPanel reveals filter-bar on first agent. Live smoke with 4 mixed-role agents confirmed all hooks in served HTML.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-21T12:13:05"
+}

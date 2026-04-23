@@ -1,0 +1,12 @@
+number = 8
+slug = "scale-demo-docs"
+status = "completed"
+description = """
+## Step 7: Scale Demo + Docs
+
+A scripted fleet of 20+ fake agents with varied..."""
+role = "production"
+context_files = []
+created_at = "2026-04-19T00:25:07"
+completed_at = "2026-04-21T16:06:57"
+commits = ["dcfb3d6324a4a979a2070b5b8db20779d9e604bb"]
