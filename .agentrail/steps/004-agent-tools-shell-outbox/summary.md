@@ -1,0 +1,1 @@
+Added shell_exec (gated on --allow-shell, 30s timeout, 4KiB output cap), outbox_send (PushEvent JSON to <atn_dir>/outboxes/<id>/), inbox_ack (rename .json to .json.done with path guards). ToolCtx agent_id+atn_dir+allow_shell fields now live. parse_push_kind + parse_priority mirror atn-cli validation. 11 new unit tests (39 total). cargo test/clippy/doc clean.

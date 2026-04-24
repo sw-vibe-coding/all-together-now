@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-project-init",
+  "state": {
+    "number": 4,
+    "step": "agent-tools-shell-outbox"
+  },
+  "action": "Added tool_shell_exec (Command::spawn with /bin/sh -c, try_wait polling w/ 100ms tick, SHELL_EXEC_TIMEOUT=30s deadline kill, combined stdout+stderr truncated to SHELL_OUTPUT_MAX=4KiB, returns {command,exit_code,bytes,output,truncated?,timed_out?}; disabled branch returns {disabled:true,message:…}). tool_outbox_send (parse_push_kind w/ hyphen alias, parse_priority, default Priority::Normal, auto agent-<id>-<millis> id + RFC3339 ts, writes pretty PushEvent JSON to <atn_dir>/outboxes/<agent_id>/<event_id>.json with create_dir_all). tool_inbox_ack (rejects empty/../../\\, renames <atn_dir>/inboxes/<agent_id>/<message_id>.json → .json.done, missing-file clean error). parse_push_kind + parse_priority helpers. Extended dispatch match with 3 new arms. tool_schemas() now exports all 5 tools with Ollama function-schema descriptions. Dropped ToolCtx #[allow(dead_code)] attributes since all fields are now live. 11 new tests: tool_schemas_includes_every_tool_name, shell_exec_gated_off_by_default, shell_exec_when_allowed_captures_stdout, shell_exec_captures_nonzero_exit, shell_exec_missing_command_argument_is_error, outbox_send_writes_push_event_json, outbox_send_accepts_hyphen_kind_alias, outbox_send_rejects_bad_kind, outbox_send_rejects_bad_priority, inbox_ack_renames_matching_file, inbox_ack_missing_file_is_clean_error, inbox_ack_rejects_forbidden_ids. cargo test/clippy/doc clean across workspace; 39 atn-agent unit tests passing.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T14:15:25"
+}
