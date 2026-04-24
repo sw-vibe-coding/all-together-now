@@ -82,6 +82,86 @@ enum AgentsCommand {
         #[command(flatten)]
         fmt: FormatArg,
     },
+    /// Send text input to an agent's PTY (auto-appends `\r`).
+    Input {
+        /// Agent id.
+        id: String,
+        /// Text to send. Omit with `--stdin` to read from stdin instead.
+        text: Option<String>,
+        /// Read the prompt from stdin instead of the positional arg.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// POST /api/agents/{id}/stop.
+    Stop {
+        /// Agent id.
+        id: String,
+    },
+    /// POST /api/agents/{id}/restart (graceful Ctrl-C + respawn).
+    Restart {
+        /// Agent id.
+        id: String,
+    },
+    /// POST /api/agents/{id}/reconnect (hard-kill local mosh/ssh + respawn).
+    Reconnect {
+        /// Agent id.
+        id: String,
+    },
+    /// DELETE /api/agents/{id}.
+    Delete {
+        /// Agent id.
+        id: String,
+    },
+    /// Poll an agent's state until it matches (or timeout).
+    ///
+    /// Canonical state strings: starting, running, idle,
+    /// awaiting_human_input, busy, blocked, completed_task, error,
+    /// disconnected. Plus the umbrella `any-non-starting`.
+    Wait {
+        /// Agent id.
+        id: String,
+        /// State to wait for. Default: `idle`.
+        #[arg(long, default_value = "idle")]
+        state: String,
+        /// Max seconds to wait before exiting non-zero.
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+        /// Initial poll interval in milliseconds. Doubles each retry
+        /// (capped at 4× this value) for light exponential backoff.
+        #[arg(long, default_value_t = 500)]
+        poll_interval: u64,
+    },
+    /// Fetch a rendered terminal snapshot and print it to stdout.
+    Screenshot {
+        /// Agent id.
+        id: String,
+        /// Output format — passed through to the server endpoint.
+        #[arg(long, value_enum, default_value_t = ScreenshotFormat::Text)]
+        format: ScreenshotFormat,
+        /// Virtual terminal rows.
+        #[arg(long, default_value_t = 40)]
+        rows: u32,
+        /// Virtual terminal cols.
+        #[arg(long, default_value_t = 120)]
+        cols: u32,
+    },
+}
+
+#[derive(Copy, Clone, ValueEnum, Debug)]
+enum ScreenshotFormat {
+    Text,
+    Ansi,
+    Html,
+}
+
+impl ScreenshotFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            ScreenshotFormat::Text => "text",
+            ScreenshotFormat::Ansi => "ansi",
+            ScreenshotFormat::Html => "html",
+        }
+    }
 }
 
 #[derive(Args)]
@@ -146,6 +226,205 @@ fn run_agents(base: &str, verbose: bool, cmd: AgentsCommand) -> u8 {
     match cmd {
         AgentsCommand::List(ListArgs { fmt }) => agents_list(base, verbose, fmt.format),
         AgentsCommand::State { id, fmt } => agents_state(base, verbose, &id, fmt.format),
+        AgentsCommand::Input { id, text, stdin } => agents_input(base, verbose, &id, text, stdin),
+        AgentsCommand::Stop { id } => agents_post_action(base, verbose, &id, "stop"),
+        AgentsCommand::Restart { id } => agents_post_action(base, verbose, &id, "restart"),
+        AgentsCommand::Reconnect { id } => agents_post_action(base, verbose, &id, "reconnect"),
+        AgentsCommand::Delete { id } => agents_delete(base, verbose, &id),
+        AgentsCommand::Wait {
+            id,
+            state,
+            timeout,
+            poll_interval,
+        } => agents_wait(base, verbose, &id, &state, timeout, poll_interval),
+        AgentsCommand::Screenshot {
+            id,
+            format,
+            rows,
+            cols,
+        } => agents_screenshot(base, verbose, &id, format, rows, cols),
+    }
+}
+
+fn agents_input(base: &str, verbose: bool, id: &str, text: Option<String>, stdin: bool) -> u8 {
+    let body = if stdin {
+        let mut buf = String::new();
+        if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf) {
+            let _ = writeln!(std::io::stderr(), "failed to read stdin: {e}");
+            return EXIT_HTTP;
+        }
+        buf
+    } else if let Some(t) = text {
+        t
+    } else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "error: pass text as a positional arg or use --stdin"
+        );
+        return EXIT_USAGE;
+    };
+    // Match the UI's atomic text+Enter send — append `\r` so the PTY
+    // writes the whole line in one input event. Multi-line input
+    // (--stdin) ends with `\r` exactly once to commit the final line.
+    let mut payload = body;
+    if !payload.ends_with('\r') && !payload.ends_with('\n') {
+        payload.push('\r');
+    }
+    let url = format!("{base}/api/agents/{id}/input");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "POST {url} ({} bytes)", payload.len());
+    }
+    let json = serde_json::json!({ "text": payload });
+    match ureq::post(&url).send_json(json) {
+        Ok(_) => EXIT_OK,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "agent '{id}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+fn agents_post_action(base: &str, verbose: bool, id: &str, action: &str) -> u8 {
+    let url = format!("{base}/api/agents/{id}/{action}");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "POST {url}");
+    }
+    match ureq::post(&url).call() {
+        Ok(_) => EXIT_OK,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "agent '{id}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+fn agents_delete(base: &str, verbose: bool, id: &str) -> u8 {
+    let url = format!("{base}/api/agents/{id}");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "DELETE {url}");
+    }
+    match ureq::delete(&url).call() {
+        Ok(_) => EXIT_OK,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "agent '{id}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+fn agents_wait(
+    base: &str,
+    verbose: bool,
+    id: &str,
+    state: &str,
+    timeout: u64,
+    poll_interval: u64,
+) -> u8 {
+    let want = StateMatch::parse(state);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    let mut backoff_ms = poll_interval;
+    let cap_ms = poll_interval.saturating_mul(4);
+    let url = format!("{base}/api/agents/{id}/state");
+    loop {
+        if verbose {
+            let _ = writeln!(std::io::stderr(), "GET {url} (backoff_ms = {backoff_ms})");
+        }
+        match ureq::get(&url).call() {
+            Ok(resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                if let Ok(ai) = serde_json::from_str::<AgentInfo>(&body)
+                    && want.matches(&state_label(&ai.state))
+                {
+                    return EXIT_OK;
+                }
+            }
+            Err(ureq::Error::Status(404, _)) => {
+                let _ = writeln!(std::io::stderr(), "agent '{id}' not found");
+                return EXIT_NOT_FOUND;
+            }
+            Err(ureq::Error::Transport(_)) => {
+                // Transient — try again after backoff until deadline.
+            }
+            Err(e) => return report_http_error(&url, e),
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            let _ = writeln!(
+                std::io::stderr(),
+                "timeout waiting for agent '{id}' to reach state {state:?}"
+            );
+            return EXIT_HTTP;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let sleep = std::time::Duration::from_millis(backoff_ms).min(remaining);
+        std::thread::sleep(sleep);
+        backoff_ms = (backoff_ms.saturating_mul(2)).min(cap_ms);
+    }
+}
+
+fn agents_screenshot(
+    base: &str,
+    verbose: bool,
+    id: &str,
+    format: ScreenshotFormat,
+    rows: u32,
+    cols: u32,
+) -> u8 {
+    let url = format!(
+        "{base}/api/agents/{id}/screenshot?format={fmt}&rows={rows}&cols={cols}",
+        fmt = format.as_str(),
+    );
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "agent '{id}' not found");
+            return EXIT_NOT_FOUND;
+        }
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status = resp.status();
+    let body = resp.into_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return report_status_error(&url, status, &body);
+    }
+    print!("{body}");
+    EXIT_OK
+}
+
+/// Parsed form of the `--state` argument.
+#[derive(Debug, PartialEq, Eq)]
+enum StateMatch {
+    /// Exact match against `AgentState::state` (canonical snake_case).
+    Exact(String),
+    /// Any state that isn't `starting` — matches `agents wait` use in
+    /// scripts that just want the PTY to have warmed up.
+    AnyNonStarting,
+}
+
+impl StateMatch {
+    fn parse(s: &str) -> Self {
+        match s {
+            "any-non-starting" | "any_non_starting" => StateMatch::AnyNonStarting,
+            // Accept hyphenated and snake-cased spellings from CLI flags.
+            "awaiting-input" | "awaiting-human-input" => {
+                StateMatch::Exact("awaiting_human_input".into())
+            }
+            "completed-task" => StateMatch::Exact("completed_task".into()),
+            other => StateMatch::Exact(other.replace('-', "_")),
+        }
+    }
+
+    fn matches(&self, actual: &str) -> bool {
+        match self {
+            StateMatch::Exact(want) => actual == want,
+            StateMatch::AnyNonStarting => actual != "starting",
+        }
     }
 }
 
@@ -439,6 +718,53 @@ mod tests {
         // stalled=true + seconds renders with "yes (5s)".
         assert!(lines[3].contains("yes (5s)"));
         assert!(lines[3].contains("developer"));
+    }
+
+    #[test]
+    fn state_match_parses_hyphen_and_snake_forms() {
+        assert_eq!(
+            StateMatch::parse("awaiting-input"),
+            StateMatch::Exact("awaiting_human_input".into())
+        );
+        assert_eq!(
+            StateMatch::parse("awaiting-human-input"),
+            StateMatch::Exact("awaiting_human_input".into())
+        );
+        assert_eq!(
+            StateMatch::parse("completed-task"),
+            StateMatch::Exact("completed_task".into())
+        );
+        assert_eq!(
+            StateMatch::parse("idle"),
+            StateMatch::Exact("idle".into())
+        );
+        assert_eq!(StateMatch::parse("any-non-starting"), StateMatch::AnyNonStarting);
+        assert_eq!(StateMatch::parse("any_non_starting"), StateMatch::AnyNonStarting);
+    }
+
+    #[test]
+    fn state_match_matches_actual_values() {
+        let idle = StateMatch::parse("idle");
+        assert!(idle.matches("idle"));
+        assert!(!idle.matches("running"));
+
+        let awaiting = StateMatch::parse("awaiting-input");
+        assert!(awaiting.matches("awaiting_human_input"));
+        assert!(!awaiting.matches("idle"));
+
+        let any = StateMatch::parse("any-non-starting");
+        assert!(!any.matches("starting"));
+        assert!(any.matches("running"));
+        assert!(any.matches("idle"));
+        assert!(any.matches("awaiting_human_input"));
+        assert!(any.matches("disconnected"));
+    }
+
+    #[test]
+    fn screenshot_format_serializes_to_endpoint_strings() {
+        assert_eq!(ScreenshotFormat::Text.as_str(), "text");
+        assert_eq!(ScreenshotFormat::Ansi.as_str(), "ansi");
+        assert_eq!(ScreenshotFormat::Html.as_str(), "html");
     }
 
     #[test]
