@@ -1,0 +1,1 @@
+Each .event-card now click-to-expands with full JSON + formatted metadata. Only one open at a time; Esc collapses (guarded). Escalation banners get a 'jump to event' button that scrolls+expands the matching card. wiki_link renders as an a.event-wiki-link anchor. All live-verified via Playwright against 3 seeded events incl. one escalation.
