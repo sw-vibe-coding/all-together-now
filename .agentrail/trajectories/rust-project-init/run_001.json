@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-project-init",
+  "state": {
+    "number": 2,
+    "step": "cli-agents-actions"
+  },
+  "action": "Extended AgentsCommand enum with Input{id,text,stdin}, Stop/Restart/Reconnect/Delete{id}, Wait{id,state,timeout,poll_interval}, Screenshot{id,format,rows,cols} + ScreenshotFormat enum with as_str. Added StateMatch {Exact(String), AnyNonStarting} with parse (hyphen/snake both accepted) and matches. Handlers: agents_input (text or --stdin, appends \\r if absent), agents_post_action (stop/restart/reconnect), agents_delete (ureq::delete), agents_wait (loop w/ backoff, deadline check, transient-error retry, parse via StateMatch), agents_screenshot (GET w/ query, stream body to stdout). 3 unit tests (state_match_parses*, state_match_matches*, screenshot_format_*). Fixed clippy collapsible_if in wait loop. Live smoke: wait any-non-starting/0, input+wait idle/0+screenshot HELLO_FROM_CLI, --stdin pwd round-trips, wait awaiting-input/timeout 2 → exit 3, delete/0, state after delete → exit 2. cargo test/clippy/doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T17:34:21"
+}
