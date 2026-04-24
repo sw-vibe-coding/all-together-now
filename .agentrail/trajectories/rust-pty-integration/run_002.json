@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-pty-integration",
+  "state": {
+    "number": 6,
+    "step": "watchdog-actions"
+  },
+  "action": "New crates/atn-server/src/watchdog_actor.rs with spawn_watchdog_actor (1s poll), ActionState (last_ctrl_c_at/blocked_notice_posted/running_escalated), coordinator-hint cache, send_ctrl_c via session.input_sender, post_blocked_notice writes JSON to .atn/outboxes/<source>/<id>.json. Added mod watchdog_actor + startup wiring in main.rs. Added stall_count_in_run to WatchdogState + on_leaving_running reset. Added .stalled CSS (amber #f59e0b outline + @keyframes atn-stall-pulse) for agent-panel/compact/spark-cell + .sc-stall 🚨 indicator. pollStates: toggle .stalled class, track sparkDirty, re-render sparkline row when stall flag flips, include 🚨 + title in renderSparklineRow. Fixed notifications hook at line 3935: now wraps origPollStates instead of replacing it. docs/windowed-ui.md: new Watchdog (stall detection) section. docs/status.md: empty Known Issues. Live verified Ctrl-C + blocked_notice path via bash+Python SIGINT-ignoring agent, UI class via Playwright stub. cargo test/clippy/doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T17:19:57"
+}

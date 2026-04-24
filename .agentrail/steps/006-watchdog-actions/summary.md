@@ -1,0 +1,1 @@
+Closed the ops-polish saga. New watchdog_actor task turns stall signals into Ctrl-C + blocked_notice escalation. WatchdogState gains stall_count_in_run for reliable two-strike detection. UI paints amber pulsing outline + 🚨 on stalled windows/sparkline cells. Live smoke: Python agent ignoring SIGINT gets Ctrl-C at +2s, blocked_notice at +4s, recovers by +7s.
