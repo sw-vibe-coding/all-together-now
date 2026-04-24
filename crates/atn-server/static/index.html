@@ -296,7 +296,19 @@
         .events-column-header { font-size: 13px; font-weight: 600; color: #c9d1d9; padding: 6px 10px; background: #16213e; border: 1px solid #0f3460; border-radius: 6px 6px 0 0; flex-shrink: 0; }
         .events-column-header .col-arrow { margin: 0 4px; color: #e94560; }
         .events-list { flex: 1; overflow-y: auto; }
-        .event-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; }
+        .event-card { border: 1px solid #0f3460; border-radius: 6px; background: #16213e; padding: 10px 14px; margin-bottom: 6px; cursor: pointer; }
+        .event-card:hover { border-color: #1e3a5f; }
+        .event-card.expanded { border-color: #4ecca3; background: #142b3d; cursor: default; }
+        .event-card .event-detail { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #0f3460; font-size: 11px; color: #9ca3af; }
+        .event-card.expanded .event-detail { display: block; }
+        .event-card .event-detail dl { display: grid; grid-template-columns: 110px 1fr; row-gap: 4px; column-gap: 10px; margin: 0 0 8px; }
+        .event-card .event-detail dt { color: #6b7280; }
+        .event-card .event-detail dd { margin: 0; color: #c9d1d9; word-break: break-word; }
+        .event-card .event-detail a.event-wiki-link { color: #4ecca3; text-decoration: none; }
+        .event-card .event-detail a.event-wiki-link:hover { text-decoration: underline; }
+        .event-card .event-detail pre { margin: 0; padding: 8px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 11px; color: #e0e0e0; overflow-x: auto; white-space: pre-wrap; }
+        .escalation-banner .esc-jump { margin-left: 8px; color: #fca5a5; text-decoration: underline; cursor: pointer; font-size: 11px; background: transparent; border: none; padding: 0; }
+        .escalation-banner .esc-jump:hover { color: #fff; }
         .event-card .event-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
         .event-card .event-kind { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
         .kind-feature_request { background: #1e3a5f; color: #60a5fa; }
@@ -3854,6 +3866,75 @@
             return 'Broadcast';
         }
 
+        function formatAbsoluteTs(iso) {
+            // Local time, human-readable.
+            const d = new Date(iso);
+            if (Number.isNaN(d.getTime())) return iso;
+            return d.toLocaleString();
+        }
+
+        function formatRelativeTs(iso) {
+            const d = new Date(iso).getTime();
+            if (Number.isNaN(d)) return '';
+            const now = Date.now();
+            const diff = Math.max(0, now - d);
+            const s = Math.floor(diff / 1000);
+            if (s < 60) return `${s}s ago`;
+            const m = Math.floor(s / 60);
+            if (m < 60) return `${m}m ago`;
+            const h = Math.floor(m / 60);
+            if (h < 48) return `${h}h ago`;
+            const days = Math.floor(h / 24);
+            return `${days}d ago`;
+        }
+
+        function escHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        /// Render the event-detail body for the inline expansion.
+        /// Pure function — no DOM writes, just returns the HTML string.
+        function renderEventDetail(entry) {
+            const ev = entry.event;
+            const absTs = formatAbsoluteTs(ev.timestamp || entry.logged_at);
+            const relTs = formatRelativeTs(ev.timestamp || entry.logged_at);
+            const wikiLinkHtml = ev.wiki_link
+                ? `<a class="event-wiki-link" href="/wiki/${encodeURIComponent(ev.wiki_link)}" target="_blank" rel="noopener" data-wiki-title="${escHtml(ev.wiki_link)}">${escHtml(ev.wiki_link)}</a>`
+                : '<span style="color:#6b7280;">(none)</span>';
+            const issueIdHtml = ev.issue_id
+                ? `<span style="color:#9ca3af;">${escHtml(ev.issue_id)}</span>`
+                : '<span style="color:#6b7280;">(none)</span>';
+            const deliveredLabel = entry.delivered ? 'yes' : 'no';
+            const priority = ev.priority || 'normal';
+            return `
+                <dl>
+                    <dt>Event ID</dt><dd>${escHtml(ev.id)}</dd>
+                    <dt>Timestamp</dt><dd>${escHtml(absTs)} <span style="color:#6b7280;">(${escHtml(relTs)})</span></dd>
+                    <dt>Priority</dt><dd>${escHtml(priority)}</dd>
+                    <dt>Source repo</dt><dd>${escHtml(ev.source_repo || '.')}</dd>
+                    <dt>Issue id</dt><dd>${issueIdHtml}</dd>
+                    <dt>Wiki link</dt><dd>${wikiLinkHtml}</dd>
+                    <dt>Delivered</dt><dd>${deliveredLabel}</dd>
+                    <dt>Decision</dt><dd>${escHtml(entry.decision)}</dd>
+                </dl>
+                <pre>${escHtml(JSON.stringify(entry, null, 2))}</pre>
+            `;
+        }
+
+        // Only one card expanded at a time. Tracked by event id so we
+        // can re-render the list (e.g. on filter change) and keep the
+        // expansion alive if the card is still visible.
+        let expandedEventId = null;
+
+        function setExpandedEvent(id) {
+            expandedEventId = id;
+            document.querySelectorAll('#events-outbound .event-card, #events-inbound .event-card').forEach((card) => {
+                card.classList.toggle('expanded', card.dataset.eventId === id);
+            });
+        }
+
         async function eventsRefresh() {
             try {
                 const res = await fetch(`${API_BASE}/api/events?since=0`);
@@ -3868,13 +3949,16 @@
 
                 // Escalations stay unfiltered — they're the "someone
                 // needs to look at this" lane, not the scan lane.
+                // Each banner gets a "jump to event" link that scrolls
+                // + expands the matching card in the columns below.
                 const escalations = entries.filter(e => e.decision.startsWith('escalate'));
                 for (const esc of escalations) {
                     const banner = document.createElement('div');
                     banner.className = 'escalation-banner';
                     banner.innerHTML = `<span class="esc-icon">!</span>
-                        <span><strong>Human attention needed:</strong> ${esc.event.summary}
-                        (from ${esc.event.source_agent}, target: ${esc.event.target_agent || 'none'}) &mdash; ${esc.decision.slice(9)}</span>`;
+                        <span><strong>Human attention needed:</strong> ${escHtml(esc.event.summary)}
+                        (from ${escHtml(esc.event.source_agent)}, target: ${escHtml(esc.event.target_agent || 'none')}) &mdash; ${escHtml(esc.decision.slice(9))}</span>
+                        <button class="esc-jump" data-jump-event-id="${escHtml(esc.event.id)}" title="Scroll + expand the matching event card">jump to event ▸</button>`;
                     escDiv.appendChild(banner);
                 }
 
@@ -3885,19 +3969,31 @@
                     const ev = entry.event;
                     const card = document.createElement('div');
                     card.className = 'event-card';
+                    card.dataset.eventId = ev.id || '';
                     card.innerHTML = `
                         <div class="event-header">
                             <span class="event-kind kind-${ev.kind}">${kindLabel(ev.kind)}</span>
                             <span class="event-decision ${decisionClass(entry.decision)}">${decisionLabel(entry.decision)}</span>
                         </div>
-                        <div class="event-summary">${ev.summary}</div>
+                        <div class="event-summary">${escHtml(ev.summary)}</div>
                         <div class="event-meta">
-                            <span>From: ${ev.source_agent}</span>
-                            <span>Target: ${ev.target_agent || '(broadcast)'}</span>
-                            <span>${entry.logged_at.slice(11, 19)}</span>
-                        </div>`;
+                            <span>From: ${escHtml(ev.source_agent)}</span>
+                            <span>Target: ${escHtml(ev.target_agent || '(broadcast)')}</span>
+                            <span>${escHtml(entry.logged_at.slice(11, 19))}</span>
+                        </div>
+                        <div class="event-detail">${renderEventDetail(entry)}</div>`;
                     const isInbound = ev.target_agent === 'coordinator';
                     (isInbound ? inbound : outbound).appendChild(card);
+                }
+
+                // Re-apply expansion on the card that was open before
+                // this refresh, if it's still visible under the filter.
+                if (expandedEventId) {
+                    const still = document.querySelector(
+                        `.event-card[data-event-id="${CSS.escape(expandedEventId)}"]`
+                    );
+                    if (still) still.classList.add('expanded');
+                    else expandedEventId = null;
                 }
                 const countEl = document.getElementById('events-count');
                 if (countEl) {
@@ -3907,6 +4003,49 @@
                 }
                 eventsLastIndex = entries.length;
             } catch (_) {}
+        }
+
+        // Event-card expand / collapse. One delegated listener for
+        // both columns + the escalation banner's "jump to event" link.
+        document.addEventListener('click', (e) => {
+            // "Jump to event" link in an escalation banner.
+            const jumpBtn = e.target.closest('[data-jump-event-id]');
+            if (jumpBtn) {
+                e.preventDefault();
+                jumpToEvent(jumpBtn.getAttribute('data-jump-event-id'));
+                return;
+            }
+            // Clicking a link inside the expanded detail (e.g. the wiki
+            // link) shouldn't collapse the card.
+            if (e.target.closest('a.event-wiki-link')) return;
+            const card = e.target.closest('.event-card[data-event-id]');
+            if (!card) return;
+            const id = card.dataset.eventId;
+            if (!id) return;
+            setExpandedEvent(expandedEventId === id ? null : id);
+        });
+
+        // Esc collapses the current expansion — but only when no
+        // input/textarea/xterm has focus, to stay consistent with the
+        // Option-C keyboard model.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (isTypingTarget(e.target)) return;
+            if (isXtermFocused()) return;
+            if (expandedEventId) {
+                e.preventDefault();
+                setExpandedEvent(null);
+            }
+        });
+
+        function jumpToEvent(id) {
+            if (!id) return;
+            const card = document.querySelector(
+                `.event-card[data-event-id="${CSS.escape(id)}"]`
+            );
+            if (!card) return;
+            setExpandedEvent(id);
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         // Poll events every 5 seconds for new escalations (shown as badge on tab)
