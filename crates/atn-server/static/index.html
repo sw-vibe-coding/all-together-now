@@ -199,6 +199,29 @@
         .dashboard .agent-panel.pinned,
         .dashboard .agent-compact.pinned { outline: 2px solid #fbbf24; outline-offset: -2px; z-index: 10; }
 
+        /* Stalled windows — the watchdog flagged them as quiet past
+           stall_secs while still `running`. Paint an amber pulsing
+           outline on the window chrome + sparkline cell so the user
+           spots a blocked agent without reading its xterm. Clears as
+           soon as the watchdog lowers stalled (any byte burst, or a
+           state transition out of Running). */
+        @keyframes atn-stall-pulse {
+            0%, 100% { outline-color: #f59e0b; }
+            50%      { outline-color: #fcd34d; }
+        }
+        .dashboard .agent-panel.stalled,
+        .dashboard .agent-compact.stalled {
+            outline: 2px solid #f59e0b;
+            outline-offset: -2px;
+            animation: atn-stall-pulse 1.4s ease-in-out infinite;
+        }
+        .spark-cell.stalled {
+            outline: 2px solid #f59e0b;
+            outline-offset: -2px;
+            animation: atn-stall-pulse 1.4s ease-in-out infinite;
+        }
+        .spark-cell .sc-stall { color: #f59e0b; font-size: 10px; flex-shrink: 0; }
+
         /* Keyboard hint — muted text in the top bar listing the bare-key
            bindings. Visible at all times; step 6 may make it dismissible. */
         .kbd-hint { font-size: 11px; color: #6b7280; margin-left: 8px; font-family: system-ui, sans-serif; }
@@ -1815,16 +1838,22 @@
                 const roleTxt = a.panel?.querySelector?.('.agent-role')?.textContent || '';
                 const isPinned = layoutState.pins.has(id);
                 const isSelected = layoutState.selectedId === id;
+                const isStalled = info.stalled === true;
+                const stalledFor = info.stalled_for_secs;
                 const classes = ['spark-cell'];
                 if (isPinned) classes.push('pinned');
                 if (isSelected) classes.push('selected');
+                if (isStalled) classes.push('stalled');
                 const cell = document.createElement('div');
                 cell.className = classes.join(' ');
                 cell.dataset.agentId = id;
-                cell.title = nameTxt;
+                cell.title = isStalled
+                    ? `${nameTxt} — stalled${stalledFor != null ? ` for ${stalledFor}s` : ''}`
+                    : nameTxt;
                 cell.innerHTML = `
                     <div class="sc-head">
                         ${isPinned ? '<span class="sc-pin" title="Pinned">📌</span>' : ''}
+                        ${isStalled ? `<span class="sc-stall" title="Watchdog: stalled${stalledFor != null ? ` for ${stalledFor}s` : ''}">🚨</span>` : ''}
                         <span class="sc-name">${escapeHTML(nameTxt)}</span>
                         <span class="sc-role">${escapeHTML(roleTxt)}</span>
                         <span class="state-badge state-${sk} sc-state">${stateLabel(stateObj)}</span>
@@ -2776,6 +2805,7 @@
                 const res = await fetch(`${API_BASE}/api/agents`);
                 if (!res.ok) return;
                 const list = await res.json();
+                let sparkDirty = false;
                 for (const agent of list) {
                     const badge = document.getElementById(`badge-${agent.id}`);
                     if (badge) {
@@ -2783,13 +2813,31 @@
                         badge.className = `state-badge state-${sk}`;
                         badge.textContent = stateLabel(agent.state);
                     }
+                    // Stall flag → amber outline on the agent panel and
+                    // the sparkline-row cell. The outline clears as
+                    // soon as the watchdog says stalled=false (byte
+                    // burst resumed or state left Running).
+                    const stalled = !!agent.stalled;
+                    const entry = agents.get(agent.id);
+                    const wasStalled = entry?.info?.stalled === true;
+                    const panel = document.getElementById(`panel-${agent.id}`);
+                    if (panel) panel.classList.toggle('stalled', stalled);
+                    const compact = document.getElementById(`compact-${agent.id}`);
+                    if (compact) compact.classList.toggle('stalled', stalled);
+                    const spark = document.querySelector(`.spark-cell[data-agent-id="${CSS.escape(agent.id)}"]`);
+                    if (spark) spark.classList.toggle('stalled', stalled);
                     // Stash the full AgentInfo on the agents map so the
                     // filter can match on spec.host / spec.user / role /
                     // state without a second fetch.
-                    const entry = agents.get(agent.id);
                     if (entry) {
                         entry.info = agent;
                     }
+                    if (stalled !== wasStalled) sparkDirty = true;
+                }
+                // Re-render the sparkline row if any agent's stall
+                // status flipped, so the inline 🚨 indicator updates.
+                if (sparkDirty && typeof renderSparklineRow === 'function') {
+                    renderSparklineRow();
                 }
             } catch (_) { /* ignore */ }
         }
@@ -3883,21 +3931,19 @@
             } catch (_) {}
         }
 
-        // Check for state changes that need attention during polling.
+        // Notification hook: wrap the primary pollStates to play a
+        // sound when an agent flips into an attention-grabbing state.
+        // (Previous version REPLACED pollStates outright, which quietly
+        // nuked the stalled-class / sparkline-dirty logic.)
         const origPollStates = pollStates;
         pollStates = async function() {
+            await origPollStates();
             try {
                 const res = await fetch(`${API_BASE}/api/agents`);
                 if (!res.ok) return;
                 const list = await res.json();
                 for (const agent of list) {
                     const sk = stateKey(agent.state);
-                    const badge = document.getElementById(`badge-${agent.id}`);
-                    if (badge) {
-                        badge.className = `state-badge state-${sk}`;
-                        badge.textContent = stateLabel(agent.state);
-                    }
-                    // Play notification on attention-needing state transitions.
                     const prev = prevAgentStates.get(agent.id);
                     if (prev && prev !== sk && (sk === 'awaiting_human_input' || sk === 'error' || sk === 'blocked')) {
                         playNotification();

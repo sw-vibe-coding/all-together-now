@@ -1,5 +1,6 @@
 mod heat;
 mod router;
+mod watchdog_actor;
 
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -253,7 +254,17 @@ async fn main() {
     };
 
     // Spawn config hot-reload watcher.
-    spawn_config_watcher(config_path, base_dir, state.clone());
+    spawn_config_watcher(config_path, base_dir.clone(), state.clone());
+
+    // Spawn the watchdog action loop — turns per-agent stall signals
+    // into Ctrl-C + blocked_notice escalation.
+    let coordinator_hint: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let _watchdog_handle = watchdog_actor::spawn_watchdog_actor(
+        state.manager.clone(),
+        base_dir,
+        coordinator_hint,
+    );
+    tracing::info!("Watchdog actor started (polling every 1s)");
 
     let app = Router::new()
         .route("/", get(index_handler))

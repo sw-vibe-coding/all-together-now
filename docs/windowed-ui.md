@@ -116,6 +116,50 @@ nine agents take a ninth each, etc. Per cell:
 Click a cell → `swap-to-focus` → the agent becomes the selected window
 (and in Carousel / Stack, the focused primary).
 
+## Watchdog (stall detection)
+
+Every agent runs with a per-session **watchdog** that tracks time
+since the last PTY byte. When the agent is in `running` state and has
+been quiet longer than `watchdog.stall_secs` (default **60 s**), it's
+flagged `stalled`:
+
+- The window chrome and the sparkline-row cell paint a pulsing amber
+  outline; the sparkline cell also shows a 🚨 indicator and the
+  elapsed stall time on hover.
+- The server's watchdog action loop (`watchdog_actor`, 1 s poll)
+  sends a Ctrl-C to the agent on the first stall event.
+- If the agent is still stalled `2 × stall_secs` after the Ctrl-C, a
+  `blocked_notice` PushEvent is written to the agent's outbox. The
+  message router delivers it to the coordinator (or broadcasts if no
+  coordinator role is registered).
+- Recovery — any byte burst or a transition out of `running` — clears
+  the stall flag and the outline.
+
+Configure per agent by nesting a `[watchdog]` section under the spec:
+
+```toml
+[[agent]]
+id = "flaky-worker"
+# ... spec fields ...
+[agent.spec.watchdog]
+stall_secs = 30            # flag as stalled after 30s of silence
+max_running_secs = 600     # escalate (blocked_notice) if running for >10min
+```
+
+The same shape works in the New Agent dialog's JSON payload:
+
+```json
+{
+  "name": "flaky-worker",
+  "working_dir": ".",
+  "agent": "claude",
+  "watchdog": { "stall_secs": 30, "max_running_secs": 600 }
+}
+```
+
+`stalled` + `stalled_for_secs` are reported alongside `state` in
+`GET /api/agents` and `GET /api/agents/{id}/state`.
+
 ## Persistence
 
 Windowed-UI state lives under `localStorage` key **`atn-window-ui-v1`**:

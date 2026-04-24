@@ -122,7 +122,7 @@ Cargo workspace with 7 crates (library-first design):
 
 ## Known Issues
 
-- State tracking timing is fragile for programmatic task completion detection
+_None tracked at present._
 
 ## Upstream Projects
 

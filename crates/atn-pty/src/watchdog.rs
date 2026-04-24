@@ -28,6 +28,13 @@ pub struct WatchdogState {
     /// Instant we first flagged `stalled = true` for the current quiet
     /// period. Used to derive `stalled_for_secs` in the state endpoint.
     pub stalled_since: Option<Instant>,
+    /// How many distinct stall events have fired during the current
+    /// `Running` window. An output burst clears the `stalled` flag
+    /// but leaves this counter alone, so `watchdog_actor` can spot
+    /// "Ctrl-C didn't unstick the agent — it went quiet again" by
+    /// watching this increment across ticks. Reset to 0 on
+    /// `on_leaving_running`.
+    pub stall_count_in_run: u32,
 }
 
 impl WatchdogState {
@@ -38,6 +45,7 @@ impl WatchdogState {
             running_since: None,
             stalled: false,
             stalled_since: None,
+            stall_count_in_run: 0,
         }
     }
 
@@ -58,6 +66,7 @@ impl WatchdogState {
         self.running_since = None;
         self.stalled = false;
         self.stalled_since = None;
+        self.stall_count_in_run = 0;
     }
 
     /// Note the agent transitioned INTO `Running` at `now`. Only the
@@ -85,6 +94,7 @@ impl WatchdogState {
         if elapsed.as_secs() >= self.config.stall_secs && !self.stalled {
             self.stalled = true;
             self.stalled_since = Some(now);
+            self.stall_count_in_run = self.stall_count_in_run.saturating_add(1);
             return true;
         }
         false
