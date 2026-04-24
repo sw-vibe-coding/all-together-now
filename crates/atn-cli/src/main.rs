@@ -74,6 +74,48 @@ enum Command {
         #[command(subcommand)]
         action: EventsCommand,
     },
+    /// Wiki pages — list, read, write, delete.
+    Wiki {
+        #[command(subcommand)]
+        action: WikiCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum WikiCommand {
+    /// List all wiki page titles (GET /api/wiki).
+    List {
+        #[command(flatten)]
+        fmt: FormatArg,
+    },
+    /// Fetch a page's content. ETag printed to stderr with --verbose.
+    Get {
+        /// Page title (e.g. `Coordination/Goals`).
+        title: String,
+    },
+    /// Create or update a page.
+    Put {
+        /// Page title.
+        title: String,
+        /// Read content from this file. Mutually exclusive with --stdin.
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+        /// Read content from stdin. Mutually exclusive with --file.
+        #[arg(long)]
+        stdin: bool,
+        /// Optimistic-concurrency ETag from a prior GET. Required when
+        /// updating an existing page; omit only when creating fresh.
+        #[arg(long, value_name = "ETAG")]
+        if_match: Option<String>,
+    },
+    /// Delete a page.
+    Delete {
+        /// Page title.
+        title: String,
+        /// ETag from a prior GET. Required by the server.
+        #[arg(long, value_name = "ETAG")]
+        if_match: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -267,6 +309,7 @@ fn main() -> ExitCode {
     let code = match cli.command {
         Command::Agents { action } => run_agents(&base, cli.verbose, action),
         Command::Events { action } => run_events(&base, cli.verbose, action),
+        Command::Wiki { action } => run_wiki(&base, cli.verbose, action),
     };
     ExitCode::from(code)
 }
@@ -933,6 +976,236 @@ fn build_push_event(
     })
 }
 
+// ── Wiki subcommands ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct WikiPageLite {
+    #[serde(default)]
+    content: String,
+}
+
+fn run_wiki(base: &str, verbose: bool, cmd: WikiCommand) -> u8 {
+    match cmd {
+        WikiCommand::List { fmt } => wiki_list(base, verbose, fmt.format),
+        WikiCommand::Get { title } => wiki_get(base, verbose, &title),
+        WikiCommand::Put {
+            title,
+            file,
+            stdin,
+            if_match,
+        } => wiki_put(base, verbose, &title, file, stdin, if_match),
+        WikiCommand::Delete { title, if_match } => {
+            wiki_delete(base, verbose, &title, if_match)
+        }
+    }
+}
+
+fn wiki_list(base: &str, verbose: bool, format: OutputFormat) -> u8 {
+    let url = format!("{base}/api/wiki");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status = resp.status();
+    let body = resp.into_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return report_status_error(&url, status, &body);
+    }
+    let titles: Vec<String> = match serde_json::from_str(&body) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "failed to parse wiki list: {e}");
+            return EXIT_HTTP;
+        }
+    };
+    match format {
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&titles).unwrap_or(body)
+            );
+        }
+        OutputFormat::Table => {
+            if titles.is_empty() {
+                println!("(no wiki pages)");
+            } else {
+                for t in titles {
+                    println!("{t}");
+                }
+            }
+        }
+    }
+    EXIT_OK
+}
+
+fn wiki_get(base: &str, verbose: bool, title: &str) -> u8 {
+    // The server's {*title} route matches on a raw path segment — pass
+    // through unencoded so titles like `Coordination/Goals` keep their
+    // slash. (Encoding the slash would break the wildcard match.)
+    let url = format!("{base}/api/wiki/{title}");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "wiki page '{title}' not found");
+            return EXIT_NOT_FOUND;
+        }
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status = resp.status();
+    let etag = resp
+        .header("ETag")
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let body = resp.into_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return report_status_error(&url, status, &body);
+    }
+    if verbose && !etag.is_empty() {
+        let _ = writeln!(std::io::stderr(), "ETag: {etag}");
+    }
+    // The GET response is JSON; stdout gets the markdown body.
+    let page: WikiPageLite = match serde_json::from_str(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(std::io::stderr(), "failed to parse page: {e}");
+            return EXIT_HTTP;
+        }
+    };
+    print!("{}", page.content);
+    EXIT_OK
+}
+
+fn read_body(file: Option<String>, stdin: bool) -> Result<String, String> {
+    match (file, stdin) {
+        (Some(_), true) => Err("--file and --stdin are mutually exclusive".to_string()),
+        (Some(path), false) => std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {path}: {e}")),
+        (None, true) => {
+            let mut buf = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                .map(|_| buf)
+                .map_err(|e| format!("failed to read stdin: {e}"))
+        }
+        (None, false) => Err("expected --file <path> or --stdin".to_string()),
+    }
+}
+
+fn wiki_put(
+    base: &str,
+    verbose: bool,
+    title: &str,
+    file: Option<String>,
+    stdin: bool,
+    if_match: Option<String>,
+) -> u8 {
+    let content = match read_body(file, stdin) {
+        Ok(c) => c,
+        Err(msg) => {
+            let _ = writeln!(std::io::stderr(), "{msg}");
+            return EXIT_USAGE;
+        }
+    };
+    let url = format!("{base}/api/wiki/{title}");
+    if verbose {
+        let _ = writeln!(
+            std::io::stderr(),
+            "PUT {url} ({} bytes){}",
+            content.len(),
+            if_match
+                .as_deref()
+                .map(|e| format!(" If-Match: {e}"))
+                .unwrap_or_default()
+        );
+    }
+    let mut req = ureq::put(&url).set("Content-Type", "application/json");
+    if let Some(etag) = &if_match {
+        req = req.set("If-Match", etag);
+    }
+    let body = serde_json::json!({ "content": content });
+    match req.send_json(body) {
+        Ok(resp) => {
+            if let Some(new_etag) = resp.header("ETag")
+                && verbose
+            {
+                let _ = writeln!(std::io::stderr(), "ETag: {new_etag}");
+            }
+            EXIT_OK
+        }
+        Err(ureq::Error::Status(409, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            report_etag_conflict(title, &body)
+        }
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "wiki page '{title}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+fn wiki_delete(
+    base: &str,
+    verbose: bool,
+    title: &str,
+    if_match: Option<String>,
+) -> u8 {
+    let url = format!("{base}/api/wiki/{title}");
+    if verbose {
+        let _ = writeln!(
+            std::io::stderr(),
+            "DELETE {url}{}",
+            if_match
+                .as_deref()
+                .map(|e| format!(" If-Match: {e}"))
+                .unwrap_or_default()
+        );
+    }
+    let mut req = ureq::delete(&url);
+    if let Some(etag) = &if_match {
+        req = req.set("If-Match", etag);
+    }
+    match req.call() {
+        Ok(_) => EXIT_OK,
+        Err(ureq::Error::Status(409, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            report_etag_conflict(title, &body)
+        }
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "wiki page '{title}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+/// Pretty-print the server's `WikiConflictResponse` body (carries the
+/// current ETag + the page the client was writing against). Exits 2 so
+/// script loops can branch on "refetch + retry" cleanly.
+fn report_etag_conflict(title: &str, body: &str) -> u8 {
+    let etag = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("current_etag").and_then(|t| t.as_str()).map(String::from))
+        .unwrap_or_default();
+    if etag.is_empty() {
+        let _ = writeln!(
+            std::io::stderr(),
+            "ETag mismatch for '{title}' — refetch and retry"
+        );
+    } else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "ETag mismatch for '{title}' — refetch and retry (current ETag: {etag})"
+        );
+    }
+    EXIT_NOT_FOUND
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1168,6 +1441,40 @@ mod tests {
         assert_eq!(ScreenshotFormat::Text.as_str(), "text");
         assert_eq!(ScreenshotFormat::Ansi.as_str(), "ansi");
         assert_eq!(ScreenshotFormat::Html.as_str(), "html");
+    }
+
+    #[test]
+    fn read_body_rejects_mutually_exclusive_sources() {
+        let err = read_body(Some("x".into()), true).unwrap_err();
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn read_body_requires_at_least_one_source() {
+        let err = read_body(None, false).unwrap_err();
+        assert!(err.contains("--file") && err.contains("--stdin"));
+    }
+
+    #[test]
+    fn read_body_reads_from_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("atn-cli-body-{}.md", std::process::id()));
+        std::fs::write(&path, "hello from file").unwrap();
+        let got = read_body(Some(path.display().to_string()), false).unwrap();
+        assert_eq!(got, "hello from file");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn etag_conflict_exits_not_found() {
+        // Confirms the exit-code contract — scripts branch on `$? == 2`.
+        let body = serde_json::to_string(&json!({
+            "error": "ETag mismatch — page was modified",
+            "current_etag": "etag-abc",
+            "page": { "title": "T", "content": "x", "html": "x", "created_at": 1, "updated_at": 2 },
+        }))
+        .unwrap();
+        assert_eq!(report_etag_conflict("T", &body), EXIT_NOT_FOUND);
     }
 
     #[test]
