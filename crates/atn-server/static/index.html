@@ -275,6 +275,22 @@
         .events-toolbar h2 { font-size: 16px; color: #c9d1d9; flex: 1; }
         .events-toolbar button { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
         .events-toolbar button:hover { background: #0f3460; }
+
+        /* Events filter bar — narrows the two-column log via a text
+           search + kind chips + delivered toggle. Pure client-side;
+           `eventsFilter` state persists in atn-window-ui-v1. */
+        .events-filter-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px; flex-wrap: wrap; flex-shrink: 0; }
+        .events-filter-bar input#events-search { flex: 0 1 260px; padding: 5px 10px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none; }
+        .events-filter-bar input#events-search:focus { border-color: #e94560; }
+        .events-filter-bar .ev-chip { padding: 3px 10px; font-size: 11px; border: 1px solid #0f3460; background: transparent; color: #888; border-radius: 12px; cursor: pointer; }
+        .events-filter-bar .ev-chip:hover { color: #c9d1d9; border-color: #1e3a5f; }
+        .events-filter-bar .ev-chip.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
+        .events-filter-bar .ev-delivered { display: flex; gap: 2px; border: 1px solid #0f3460; border-radius: 12px; overflow: hidden; }
+        .events-filter-bar .ev-delivered button { padding: 3px 10px; font-size: 11px; background: transparent; color: #888; border: none; cursor: pointer; }
+        .events-filter-bar .ev-delivered button.active { background: #0f3460; color: #4ecca3; }
+        .events-filter-bar .ev-reset { padding: 3px 10px; background: transparent; border: 1px solid #0f3460; border-radius: 4px; color: #888; cursor: pointer; font-size: 11px; }
+        .events-filter-bar .ev-reset:hover { color: #fca5a5; border-color: #7f1d1d; }
+        .events-filter-bar .ev-count { margin-left: auto; font-size: 11px; color: #6b7280; }
         .events-columns { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 0; overflow: hidden; }
         .events-column { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
         .events-column-header { font-size: 13px; font-weight: 600; color: #c9d1d9; padding: 6px 10px; background: #16213e; border: 1px solid #0f3460; border-radius: 6px 6px 0 0; flex-shrink: 0; }
@@ -569,6 +585,22 @@
         <div class="events-toolbar">
             <h2>Push Event Log</h2>
             <button onclick="eventsRefresh()">Refresh</button>
+        </div>
+        <div class="events-filter-bar" id="events-filter-bar">
+            <input type="text" id="events-search" placeholder="Filter by summary or agent id…" />
+            <button class="ev-chip" data-kind="feature_request">feature</button>
+            <button class="ev-chip" data-kind="bug_fix_request">bug-fix</button>
+            <button class="ev-chip" data-kind="completion_notice">completed</button>
+            <button class="ev-chip" data-kind="blocked_notice">blocked</button>
+            <button class="ev-chip" data-kind="needs_info">needs-info</button>
+            <button class="ev-chip" data-kind="verification_request">verify</button>
+            <span class="ev-delivered" role="radiogroup" aria-label="delivered state">
+                <button data-delivered="all">all</button>
+                <button data-delivered="delivered">delivered</button>
+                <button data-delivered="undelivered">undelivered</button>
+            </span>
+            <button class="ev-reset" id="events-reset" title="Clear all filters">✕ reset</button>
+            <span class="ev-count" id="events-count"></span>
         </div>
         <div id="events-escalations"></div>
         <div class="events-columns">
@@ -1555,6 +1587,11 @@
                     sortMode: layoutState.sortMode,
                     selectedId: layoutState.selectedId,
                     windows: windowsOut,
+                    eventsFilter: {
+                        text: eventsFilter.text,
+                        kinds: Array.from(eventsFilter.kinds),
+                        delivered: eventsFilter.delivered,
+                    },
                 });
                 localStorage.setItem(WINDOW_PREFS_KEY, data);
             } catch (_) { /* localStorage unavailable or full — ignore */ }
@@ -1592,6 +1629,16 @@
                             pinned: layoutState.pins.has(id),
                             ...(pinnedRect ? { pinnedRect } : {}),
                         };
+                    }
+                }
+                if (data.eventsFilter && typeof data.eventsFilter === 'object') {
+                    const ef = data.eventsFilter;
+                    if (typeof ef.text === 'string') eventsFilter.text = ef.text;
+                    if (Array.isArray(ef.kinds)) {
+                        eventsFilter.kinds = new Set(ef.kinds.filter((k) => typeof k === 'string'));
+                    }
+                    if (ef.delivered === 'all' || ef.delivered === 'delivered' || ef.delivered === 'undelivered') {
+                        eventsFilter.delivered = ef.delivered;
                     }
                 }
             } catch (_) { /* malformed — drop */ }
@@ -2943,6 +2990,7 @@
             setupFilterBar();
             refreshSavedLayoutsDropdown();
             setupLayoutSelector();
+            setupEventsFilterBar();
             // Stack mode persisted from a prior session: reconcile stored
             // window state before the first layout so the primary vs.
             // minimized split is consistent with the layoutMode.
@@ -3706,6 +3754,83 @@
         // ── Events log ────────────────────────────────────────
         let eventsLastIndex = 0;
 
+        /// Client-side filter state for the Events view. Persisted in
+        /// atn-window-ui-v1 under the `eventsFilter` sub-key so a
+        /// refresh restores the last-used filter.
+        const eventsFilter = {
+            text: '',
+            kinds: new Set(),                  // subset of PushKind snake_case strings
+            delivered: 'all',                  // 'all' | 'delivered' | 'undelivered'
+        };
+
+        function eventsFilterMatches(entry) {
+            if (eventsFilter.kinds.size > 0 && !eventsFilter.kinds.has(entry.event.kind)) return false;
+            if (eventsFilter.delivered === 'delivered' && !entry.delivered) return false;
+            if (eventsFilter.delivered === 'undelivered' && entry.delivered) return false;
+            const q = eventsFilter.text.trim().toLowerCase();
+            if (q) {
+                const hay = [
+                    entry.event.summary || '',
+                    entry.event.source_agent || '',
+                    entry.event.target_agent || '',
+                ].join(' ').toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+            return true;
+        }
+
+        function renderEventsFilterBarState() {
+            const input = document.getElementById('events-search');
+            if (input) input.value = eventsFilter.text;
+            document.querySelectorAll('.events-filter-bar .ev-chip[data-kind]').forEach((b) => {
+                b.classList.toggle('active', eventsFilter.kinds.has(b.dataset.kind));
+            });
+            document.querySelectorAll('.events-filter-bar .ev-delivered button[data-delivered]').forEach((b) => {
+                b.classList.toggle('active', b.dataset.delivered === eventsFilter.delivered);
+            });
+        }
+
+        function setupEventsFilterBar() {
+            const input = document.getElementById('events-search');
+            if (input) {
+                input.addEventListener('input', () => {
+                    eventsFilter.text = input.value;
+                    saveWindowUiPrefs();
+                    eventsRefresh();
+                });
+            }
+            document.querySelectorAll('.events-filter-bar .ev-chip[data-kind]').forEach((b) => {
+                b.addEventListener('click', () => {
+                    const k = b.dataset.kind;
+                    if (eventsFilter.kinds.has(k)) eventsFilter.kinds.delete(k);
+                    else eventsFilter.kinds.add(k);
+                    b.classList.toggle('active', eventsFilter.kinds.has(k));
+                    saveWindowUiPrefs();
+                    eventsRefresh();
+                });
+            });
+            document.querySelectorAll('.events-filter-bar .ev-delivered button[data-delivered]').forEach((b) => {
+                b.addEventListener('click', () => {
+                    eventsFilter.delivered = b.dataset.delivered;
+                    renderEventsFilterBarState();
+                    saveWindowUiPrefs();
+                    eventsRefresh();
+                });
+            });
+            const reset = document.getElementById('events-reset');
+            if (reset) {
+                reset.addEventListener('click', () => {
+                    eventsFilter.text = '';
+                    eventsFilter.kinds.clear();
+                    eventsFilter.delivered = 'all';
+                    renderEventsFilterBarState();
+                    saveWindowUiPrefs();
+                    eventsRefresh();
+                });
+            }
+            renderEventsFilterBarState();
+        }
+
         const KIND_LABELS = {
             feature_request: 'Feature Request',
             bug_fix_request: 'Bug Fix',
@@ -3741,7 +3866,8 @@
                 inbound.innerHTML = '';
                 escDiv.innerHTML = '';
 
-                // Show escalations at the top
+                // Escalations stay unfiltered — they're the "someone
+                // needs to look at this" lane, not the scan lane.
                 const escalations = entries.filter(e => e.decision.startsWith('escalate'));
                 for (const esc of escalations) {
                     const banner = document.createElement('div');
@@ -3752,9 +3878,10 @@
                     escDiv.appendChild(banner);
                 }
 
-                // Split events into outbound (to non-coordinator) and inbound (to coordinator)
-                for (let i = entries.length - 1; i >= 0; i--) {
-                    const entry = entries[i];
+                // Apply filter before rendering the two columns.
+                const shown = entries.filter(eventsFilterMatches);
+                for (let i = shown.length - 1; i >= 0; i--) {
+                    const entry = shown[i];
                     const ev = entry.event;
                     const card = document.createElement('div');
                     card.className = 'event-card';
@@ -3771,6 +3898,12 @@
                         </div>`;
                     const isInbound = ev.target_agent === 'coordinator';
                     (isInbound ? inbound : outbound).appendChild(card);
+                }
+                const countEl = document.getElementById('events-count');
+                if (countEl) {
+                    countEl.textContent = shown.length === entries.length
+                        ? `${entries.length} entries`
+                        : `${shown.length} / ${entries.length} entries`;
                 }
                 eventsLastIndex = entries.length;
             } catch (_) {}
