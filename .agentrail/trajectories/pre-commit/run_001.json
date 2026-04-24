@@ -1,0 +1,11 @@
+{
+  "task_type": "pre-commit",
+  "state": {
+    "number": 5,
+    "step": "agent-integration-demo-docs"
+  },
+  "action": "Added crates/atn-agent/tests/integration.rs: spawn_stub uses TcpListener::bind 127.0.0.1:0 + manual HTTP/1.1 parser (request line, content-length header, body); tool_call_response / final_content_response builders; two tests — agent_runs_file_write_then_outbox_then_exits asserts workspace file + outbox PushEvent JSON (source_agent/target_agent/kind/summary) + inbox .json.done, agent_handles_disabled_shell_tool_gracefully asserts tool shell_exec → ok w/ disabled:true + recovery. Uses CARGO_BIN_EXE_atn-agent + --exit-on-empty. Wrote docs/atn-agent.md with quick start, CLI table, exit codes, per-tool reference (file_read w/ truncation, file_write, shell_exec timing + cap + gating, outbox_send PushEvent shape, inbox_ack rename), security notes, testing pointers. Wrote demos/atn-agent/setup.sh (mode=--stub runs cargo test --test integration; mode=real seeds .atn-demo-atn-agent inbox, checks Ollama reachable, runs agent --allow-shell --exit-on-empty, prints inbox/outbox/workspace after). chmod +x. Edited docs/demos-scripts.md: Demo 12 full walkthrough, index row, short-slot Rust-native-AI entry, atn-agent.md in See-also. Edited docs/status.md: Current State → atn-agent Saga Complete, Dashboard-Polish → Prior Milestone, A1..A5 rows, atn-agent in What Exists + architecture list (9 crates). cargo test workspace 39+2+18+1+43+22+11+6+1 all green; clippy -D warnings + doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T14:52:50"
+}

@@ -1,0 +1,1 @@
+Closed the atn-agent saga. New end-to-end integration test with in-process HTTP stub drives file_write → outbox_send → final content and the disabled-shell recovery path (~1.2s, no Ollama). docs/atn-agent.md + demos/atn-agent/setup.sh (--stub + Ollama modes) + Demo 12 + A1..A5 status rows + atn-agent crate row in status.md.
