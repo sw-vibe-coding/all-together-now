@@ -202,6 +202,11 @@
         .wiki-side-panel .wsp-empty { padding: 20px; text-align: center; color: #6b7280; font-size: 12px; }
         .wiki-side-panel .wsp-error { padding: 12px 14px; color: #fca5a5; font-size: 12px; }
 
+        /* Brief green flash on live re-render so the user notices
+           someone edited the page out-of-band. */
+        @keyframes wsp-flash { 0% { background: #064e3b; } 100% { background: transparent; } }
+        .wiki-side-panel .wsp-body.wsp-flash { animation: wsp-flash 350ms ease-out; }
+
         /* View tabs */
         .view-tabs { display: flex; gap: 4px; margin-left: auto; }
         .view-tab { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
@@ -4078,9 +4083,20 @@
                 jumpToEvent(jumpBtn.getAttribute('data-jump-event-id'));
                 return;
             }
-            // Clicking a link inside the expanded detail (e.g. the wiki
-            // link) shouldn't collapse the card.
-            if (e.target.closest('a.event-wiki-link')) return;
+            // Clicking a link inside the expanded detail. If the wiki
+            // panel is open, reuse it instead of spawning a new tab.
+            // Otherwise, let the anchor's default behavior run (opens
+            // /wiki/<title> in a new tab thanks to target="_blank").
+            const wikiLink = e.target.closest('a.event-wiki-link');
+            if (wikiLink) {
+                if (wikiPanel.open) {
+                    e.preventDefault();
+                    const title = wikiLink.dataset.wikiTitle
+                        || decodeURIComponent((wikiLink.getAttribute('href') || '').replace(/^\/wiki\//, ''));
+                    if (title) openWikiPanelAt(title);
+                }
+                return;
+            }
             const card = e.target.closest('.event-card[data-event-id]');
             if (!card) return;
             const id = card.dataset.eventId;
@@ -4128,7 +4144,13 @@
         const wikiPanel = {
             open: false,
             title: null,
+            // ETag of the currently-rendered page. Used for
+            // If-None-Match polling so unchanged pages round-trip
+            // as 304s instead of re-rendering.
+            etag: null,
+            _pollTimer: null,
         };
+        const WIKI_PANEL_POLL_MS = 5000;
 
         function wikiPanelElements() {
             return {
@@ -4177,32 +4199,78 @@
             } catch (_) { /* leave placeholder option */ }
         }
 
-        async function loadWikiPanelPage(title) {
+        /// Fetch + render a wiki page into the side-panel body.
+        ///
+        /// `mode` is `'initial'` (user-driven — always refetch, show a
+        /// Loading spinner) or `'poll'` (background refresh — passes
+        /// If-None-Match so the server can 304; no loading spinner;
+        /// flashes the body on any real re-render). Titles pass through
+        /// the server's {*title} wildcard route as-is.
+        async function loadWikiPanelPage(title, mode = 'initial') {
             const { body } = wikiPanelElements();
             if (!body) return;
             if (!title) {
                 body.innerHTML = '<div class="wsp-empty">Pick a page above.</div>';
+                wikiPanel.etag = null;
                 return;
             }
-            body.innerHTML = '<div class="wsp-empty">Loading…</div>';
-            // Titles in the server's {*title} route go through as raw
-            // path segments. Storage uses `__` for `/`, so the REST
-            // path accepts either — we pass the raw title.
+            if (mode === 'initial') {
+                body.innerHTML = '<div class="wsp-empty">Loading…</div>';
+                wikiPanel.etag = null;
+            }
             const url = `${API_BASE}/api/wiki/${title}`;
+            const headers = {};
+            if (mode === 'poll' && wikiPanel.etag) {
+                headers['If-None-Match'] = wikiPanel.etag;
+            }
             try {
-                const res = await fetch(url);
+                const res = await fetch(url, { headers });
+                if (res.status === 304) return; // unchanged
                 if (res.status === 404) {
-                    body.innerHTML = '<div class="wsp-error">Page not found.</div>';
+                    body.innerHTML = '<div class="wsp-empty">(page deleted)</div>';
+                    wikiPanel.etag = null;
                     return;
                 }
                 if (!res.ok) {
                     body.innerHTML = `<div class="wsp-error">Wiki fetch failed: ${res.status}</div>`;
                     return;
                 }
+                const newEtag = res.headers.get('ETag');
+                // Skip re-render if ETag matches (server may not have
+                // honored If-None-Match on the first request).
+                if (mode === 'poll' && newEtag && newEtag === wikiPanel.etag) return;
                 const page = await res.json();
                 body.innerHTML = page.html || '<div class="wsp-empty">(empty page)</div>';
+                wikiPanel.etag = newEtag;
+                if (mode === 'poll') {
+                    // Briefly flash the body to signal a live update.
+                    body.classList.remove('wsp-flash');
+                    // Forcing a reflow restarts the CSS animation.
+                    void body.offsetWidth;
+                    body.classList.add('wsp-flash');
+                    setTimeout(() => body.classList.remove('wsp-flash'), 400);
+                }
             } catch (e) {
-                body.innerHTML = `<div class="wsp-error">${escHtml(String(e))}</div>`;
+                if (mode === 'initial') {
+                    body.innerHTML = `<div class="wsp-error">${escHtml(String(e))}</div>`;
+                }
+                // Swallow poll-time transport errors — next tick retries.
+            }
+        }
+
+        function startWikiPanelPolling() {
+            if (wikiPanel._pollTimer) return;
+            wikiPanel._pollTimer = setInterval(() => {
+                if (!wikiPanel.open || document.hidden) return;
+                if (!wikiPanel.title) return;
+                loadWikiPanelPage(wikiPanel.title, 'poll');
+            }, WIKI_PANEL_POLL_MS);
+        }
+
+        function stopWikiPanelPolling() {
+            if (wikiPanel._pollTimer) {
+                clearInterval(wikiPanel._pollTimer);
+                wikiPanel._pollTimer = null;
             }
         }
 
@@ -4213,8 +4281,30 @@
             saveWindowUiPrefs();
             if (next) {
                 await populateWikiPanelSelect();
-                await loadWikiPanelPage(wikiPanel.title);
+                await loadWikiPanelPage(wikiPanel.title, 'initial');
+                startWikiPanelPolling();
+            } else {
+                stopWikiPanelPolling();
             }
+        }
+
+        /// Switch the panel to a different wiki title. If the panel is
+        /// closed, opens it. Used by the events-row wiki-link hook so
+        /// a click on a `wiki_link` can reuse the panel instead of
+        /// opening a new browser tab.
+        async function openWikiPanelAt(title) {
+            if (!title) return;
+            wikiPanel.title = title;
+            const { select } = wikiPanelElements();
+            if (select && Array.from(select.options).some((o) => o.value === title)) {
+                select.value = title;
+            }
+            if (!wikiPanel.open) {
+                await toggleWikiPanel(true);
+                return;
+            }
+            saveWindowUiPrefs();
+            await loadWikiPanelPage(title, 'initial');
         }
 
         function setupWikiPanel() {
@@ -4225,14 +4315,25 @@
                 select.addEventListener('change', async () => {
                     wikiPanel.title = select.value || null;
                     saveWindowUiPrefs();
-                    await loadWikiPanelPage(wikiPanel.title);
+                    await loadWikiPanelPage(wikiPanel.title, 'initial');
                 });
             }
             syncWikiPanelToggle();
+            // Pause polling when the browser tab goes into the
+            // background — the interval keeps running but the body of
+            // the tick no-ops on document.hidden. Kicks a refresh on
+            // return so the panel catches up promptly.
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && wikiPanel.open && wikiPanel.title) {
+                    loadWikiPanelPage(wikiPanel.title, 'poll');
+                }
+            });
             if (wikiPanel.open) {
                 // Prefs say the panel was open on last refresh —
                 // repopulate + fetch so the body is fresh.
-                populateWikiPanelSelect().then(() => loadWikiPanelPage(wikiPanel.title));
+                populateWikiPanelSelect()
+                    .then(() => loadWikiPanelPage(wikiPanel.title, 'initial'))
+                    .then(startWikiPanelPolling);
             }
         }
 

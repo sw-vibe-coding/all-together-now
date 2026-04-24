@@ -1491,8 +1491,14 @@ async fn wiki_list_pages(State(state): State<AppState>) -> Json<Vec<String>> {
 }
 
 /// Get a wiki page by title. Returns JSON with ETag header.
+///
+/// Honors `If-None-Match`: when the client's last-seen ETag matches
+/// the current content ETag, return `304 Not Modified` with no body.
+/// The wiki side-panel's 5 s poll leans on this to skip re-rendering
+/// unchanged pages over the wire.
 async fn wiki_get_page(
     Path(title): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Response, StatusCode> {
     let page = state
@@ -1502,6 +1508,21 @@ async fn wiki_get_page(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let etag = content_etag(&page.content);
+
+    // If-None-Match short-circuit: no body on a match, just 304 + ETag.
+    if let Some(inm) = headers
+        .get("If-None-Match")
+        .and_then(|v| v.to_str().ok())
+        && inm == etag
+    {
+        let mut resp = axum::http::Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .body(axum::body::Body::empty())
+            .unwrap();
+        resp.headers_mut().insert("ETag", etag.parse().unwrap());
+        return Ok(resp);
+    }
+
     let html = render_wiki_content(&page.content);
     let body = WikiPageResponse {
         title: page.title,
