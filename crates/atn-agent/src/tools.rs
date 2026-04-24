@@ -11,7 +11,11 @@
 //! match arms land in the same place.
 
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
+use atn_core::event::{Priority, PushEvent, PushKind};
+use atn_core::inbox::{INBOXES_DIR, OUTBOXES_DIR};
 use serde_json::{Value, json};
 
 use crate::llm::{ToolCall, ToolFunctionSchema, ToolSchema};
@@ -24,6 +28,15 @@ pub const FILE_READ_MAX: usize = 256 * 1024;
 /// workspace from a runaway model.
 pub const FILE_WRITE_MAX: usize = 1024 * 1024;
 
+/// Wall-clock ceiling on `shell_exec` invocations. After this, we
+/// kill the child and return whatever stdout / stderr we captured
+/// plus a `"timed out after Ns"` notice.
+pub const SHELL_EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Max bytes of combined stdout+stderr we send back to the model.
+pub const SHELL_OUTPUT_MAX: usize = 4 * 1024;
+
+
 /// Context passed to each tool invocation. Kept small + Clone so
 /// the main loop can share it across iterations without lifetimes.
 #[derive(Clone, Debug)]
@@ -31,15 +44,16 @@ pub struct ToolCtx {
     /// Sandbox root. Absolute after canonicalization — everything
     /// goes through `sandbox_path` first so `..` escapes are caught.
     pub workspace: PathBuf,
-    /// Agent id — threaded in for step-4's outbox writer.
-    #[allow(dead_code)]
+    /// Agent id. Used by `outbox_send` + `inbox_ack` to locate
+    /// the per-agent queue directories.
     pub agent_id: String,
-    /// ATN coordination root (`.atn` by default). Step 4 writes
-    /// outbox files under `<atn_dir>/outboxes/<agent_id>/`.
-    #[allow(dead_code)]
+    /// ATN coordination root (`.atn` by default). Used to resolve
+    /// `<atn_dir>/outboxes/<agent_id>/` and
+    /// `<atn_dir>/inboxes/<agent_id>/`.
     pub atn_dir: PathBuf,
-    /// Flag for step-4's `shell_exec` gate.
-    #[allow(dead_code)]
+    /// Gates the `shell_exec` tool. When false, invoking
+    /// `shell_exec` returns a "disabled" message (not an error —
+    /// the model should be told it can't run shell).
     pub allow_shell: bool,
 }
 
@@ -111,6 +125,69 @@ pub fn tool_schemas() -> Vec<ToolSchema> {
                 }),
             },
         },
+        ToolSchema {
+            kind: "function".into(),
+            function: ToolFunctionSchema {
+                name: "shell_exec".into(),
+                description: "Run a shell command under `/bin/sh -c` in the workspace. 30 s timeout, stdout+stderr truncated to 4 KiB. Disabled unless --allow-shell is set on the agent.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command line to run."
+                        }
+                    },
+                    "required": ["command"]
+                }),
+            },
+        },
+        ToolSchema {
+            kind: "function".into(),
+            function: ToolFunctionSchema {
+                name: "outbox_send".into(),
+                description: "Emit a PushEvent to the message router. Valid kinds: feature_request, bug_fix_request, completion_notice, blocked_notice, needs_info, verification_request. Priority defaults to 'normal' if omitted.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": "Target agent id. Omit for broadcast."
+                        },
+                        "kind": {
+                            "type": "string",
+                            "description": "PushKind snake_case (e.g. 'completion_notice')."
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "Short human-readable summary becomes the target's next prompt."
+                        },
+                        "priority": {
+                            "type": "string",
+                            "description": "One of 'normal' | 'high' | 'blocking'. Defaults to normal."
+                        }
+                    },
+                    "required": ["kind", "summary"]
+                }),
+            },
+        },
+        ToolSchema {
+            kind: "function".into(),
+            function: ToolFunctionSchema {
+                name: "inbox_ack".into(),
+                description: "Mark an inbox message as handled by renaming <message_id>.json → .json.done. The main loop auto-acks each message after its chat turn, but use this to explicitly ack mid-run when a single prompt handles multiple inbox entries.".into(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "message_id": {
+                            "type": "string",
+                            "description": "PushEvent id matching <message_id>.json in the agent's inbox."
+                        }
+                    },
+                    "required": ["message_id"]
+                }),
+            },
+        },
     ]
 }
 
@@ -125,6 +202,9 @@ pub fn dispatch(call: &ToolCall, ctx: &ToolCtx) -> ToolResult {
     match name {
         "file_read" => tool_file_read(&args, ctx),
         "file_write" => tool_file_write(&args, ctx),
+        "shell_exec" => tool_shell_exec(&args, ctx),
+        "outbox_send" => tool_outbox_send(&args, ctx),
+        "inbox_ack" => tool_inbox_ack(&args, ctx),
         other => ToolResult::err(format!("unknown tool '{other}'")),
     }
 }
@@ -209,6 +289,220 @@ fn tool_file_write(args: &Value, ctx: &ToolCtx) -> ToolResult {
         "bytes": content.len(),
         "message": format!("wrote {} bytes to {}", content.len(), path),
     }))
+}
+
+fn tool_shell_exec(args: &Value, ctx: &ToolCtx) -> ToolResult {
+    if !ctx.allow_shell {
+        // Not an error — the model needs to know the tool is off
+        // so it can stop calling it.
+        return ToolResult::ok_value(json!({
+            "disabled": true,
+            "message": "shell_exec is disabled on this agent (start with --allow-shell to enable)",
+        }));
+    }
+    let Some(command) = args.get("command").and_then(|v| v.as_str()) else {
+        return ToolResult::err("missing required argument 'command'");
+    };
+    let mut child = match Command::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&ctx.workspace)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return ToolResult::err(format!("spawn /bin/sh: {e}")),
+    };
+
+    let deadline = Instant::now() + SHELL_EXEC_TIMEOUT;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    timed_out = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return ToolResult::err(format!("wait for shell: {e}")),
+        }
+    }
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return ToolResult::err(format!("collect shell output: {e}")),
+    };
+
+    // Combined stream — models don't usually care which was which.
+    let mut combined = String::new();
+    combined.push_str(&String::from_utf8_lossy(&output.stdout));
+    if !output.stderr.is_empty() {
+        if !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    let total = combined.len();
+    let (body, truncated) = if total > SHELL_OUTPUT_MAX {
+        (
+            format!(
+                "{prefix}\n…truncated ({total} bytes total)",
+                prefix = &combined[..SHELL_OUTPUT_MAX]
+            ),
+            true,
+        )
+    } else {
+        (combined, false)
+    };
+
+    let exit = output.status.code();
+    let mut out = json!({
+        "command": command,
+        "exit_code": exit,
+        "bytes": total,
+        "output": body,
+    });
+    if timed_out {
+        out["timed_out"] = json!(true);
+        out["notice"] = json!(format!(
+            "killed after {}s (SHELL_EXEC_TIMEOUT)",
+            SHELL_EXEC_TIMEOUT.as_secs()
+        ));
+    }
+    if truncated {
+        out["truncated"] = json!(true);
+    }
+    ToolResult::ok_value(out)
+}
+
+fn tool_outbox_send(args: &Value, ctx: &ToolCtx) -> ToolResult {
+    let Some(kind_str) = args.get("kind").and_then(|v| v.as_str()) else {
+        return ToolResult::err("missing required argument 'kind'");
+    };
+    let Some(summary) = args.get("summary").and_then(|v| v.as_str()) else {
+        return ToolResult::err("missing required argument 'summary'");
+    };
+    let kind = match parse_push_kind(kind_str) {
+        Ok(k) => k,
+        Err(e) => return ToolResult::err(e),
+    };
+    let priority = match args.get("priority").and_then(|v| v.as_str()) {
+        Some(p) => match parse_priority(p) {
+            Ok(pr) => pr,
+            Err(e) => return ToolResult::err(e),
+        },
+        None => Priority::Normal,
+    };
+    let target = args
+        .get("target")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let event_id = format!(
+        "agent-{id}-{millis}",
+        id = ctx.agent_id,
+        millis = chrono::Utc::now().timestamp_millis()
+    );
+    let event = PushEvent {
+        id: event_id.clone(),
+        kind,
+        source_agent: ctx.agent_id.clone(),
+        source_repo: ".".into(),
+        target_agent: target,
+        issue_id: None,
+        summary: summary.to_string(),
+        wiki_link: None,
+        priority,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let outbox_dir = ctx
+        .atn_dir
+        .join(OUTBOXES_DIR)
+        .join(&ctx.agent_id);
+    if let Err(e) = std::fs::create_dir_all(&outbox_dir) {
+        return ToolResult::err(format!(
+            "create outbox dir {}: {e}",
+            outbox_dir.display()
+        ));
+    }
+    let path = outbox_dir.join(format!("{event_id}.json"));
+    let json_body = match serde_json::to_string_pretty(&event) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::err(format!("serialize event: {e}")),
+    };
+    if let Err(e) = std::fs::write(&path, json_body) {
+        return ToolResult::err(format!("write {}: {e}", path.display()));
+    }
+    ToolResult::ok_value(json!({
+        "event_id": event_id,
+        "path": path.display().to_string(),
+        "message": format!("outbox_send wrote {event_id}"),
+    }))
+}
+
+fn tool_inbox_ack(args: &Value, ctx: &ToolCtx) -> ToolResult {
+    let Some(message_id) = args.get("message_id").and_then(|v| v.as_str()) else {
+        return ToolResult::err("missing required argument 'message_id'");
+    };
+    // Guard against path-injection via message_id.
+    if message_id.is_empty()
+        || message_id.contains('/')
+        || message_id.contains('\\')
+        || message_id.contains("..")
+    {
+        return ToolResult::err(format!(
+            "message_id {message_id:?} contains forbidden characters"
+        ));
+    }
+    let inbox_dir = ctx.atn_dir.join(INBOXES_DIR).join(&ctx.agent_id);
+    let src = inbox_dir.join(format!("{message_id}.json"));
+    let dst = inbox_dir.join(format!("{message_id}.json.done"));
+    if !src.exists() {
+        return ToolResult::err(format!(
+            "inbox message {message_id} not found at {}",
+            src.display()
+        ));
+    }
+    if let Err(e) = std::fs::rename(&src, &dst) {
+        return ToolResult::err(format!("rename {}: {e}", src.display()));
+    }
+    ToolResult::ok_value(json!({
+        "message_id": message_id,
+        "message": format!("acked {message_id}"),
+    }))
+}
+
+fn parse_push_kind(s: &str) -> Result<PushKind, String> {
+    let norm = s.replace('-', "_");
+    Ok(match norm.as_str() {
+        "feature_request" => PushKind::FeatureRequest,
+        "bug_fix_request" => PushKind::BugFixRequest,
+        "completion_notice" => PushKind::CompletionNotice,
+        "blocked_notice" => PushKind::BlockedNotice,
+        "needs_info" => PushKind::NeedsInfo,
+        "verification_request" => PushKind::VerificationRequest,
+        other => {
+            return Err(format!(
+                "invalid kind '{other}'; valid values: feature_request, bug_fix_request, completion_notice, blocked_notice, needs_info, verification_request"
+            ));
+        }
+    })
+}
+
+fn parse_priority(s: &str) -> Result<Priority, String> {
+    match s {
+        "normal" => Ok(Priority::Normal),
+        "high" => Ok(Priority::High),
+        "blocking" => Ok(Priority::Blocking),
+        other => Err(format!(
+            "invalid priority '{other}'; valid values: normal, high, blocking"
+        )),
+    }
 }
 
 /// Resolve `user_path` against `workspace` and confirm the result
@@ -416,13 +710,231 @@ mod tests {
     }
 
     #[test]
-    fn tool_schemas_includes_file_read_and_write() {
+    fn tool_schemas_includes_every_tool_name() {
         let schemas = tool_schemas();
         let names: Vec<&str> = schemas
             .iter()
             .map(|s| s.function.name.as_str())
             .collect();
-        assert!(names.contains(&"file_read"));
-        assert!(names.contains(&"file_write"));
+        for expected in [
+            "file_read",
+            "file_write",
+            "shell_exec",
+            "outbox_send",
+            "inbox_ack",
+        ] {
+            assert!(names.contains(&expected), "missing schema: {expected}");
+        }
+    }
+
+    fn make_shell_call(cmd: &str) -> ToolCall {
+        ToolCall {
+            id: None,
+            kind: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "shell_exec".into(),
+                arguments: json!({ "command": cmd }),
+            },
+        }
+    }
+
+    #[test]
+    fn shell_exec_gated_off_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(tmp.path().to_path_buf());
+        assert!(!ctx.allow_shell);
+        let res = dispatch(&make_shell_call("echo hi"), &ctx);
+        assert!(res.ok);
+        let v: Value = serde_json::from_str(&res.content).unwrap();
+        assert_eq!(v["disabled"], true);
+        assert!(v["message"].as_str().unwrap().contains("--allow-shell"));
+    }
+
+    #[test]
+    fn shell_exec_when_allowed_captures_stdout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.allow_shell = true;
+        let res = dispatch(&make_shell_call("echo hello-from-shell"), &ctx);
+        assert!(res.ok);
+        let v: Value = serde_json::from_str(&res.content).unwrap();
+        assert_eq!(v["exit_code"], 0);
+        assert!(v["output"].as_str().unwrap().contains("hello-from-shell"));
+        assert!(v.get("timed_out").is_none());
+    }
+
+    #[test]
+    fn shell_exec_captures_nonzero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.allow_shell = true;
+        let res = dispatch(&make_shell_call("exit 7"), &ctx);
+        assert!(res.ok, "{}", res.content);
+        let v: Value = serde_json::from_str(&res.content).unwrap();
+        assert_eq!(v["exit_code"], 7);
+    }
+
+    #[test]
+    fn shell_exec_missing_command_argument_is_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.allow_shell = true;
+        let call = ToolCall {
+            id: None,
+            kind: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "shell_exec".into(),
+                arguments: json!({}),
+            },
+        };
+        let res = dispatch(&call, &ctx);
+        assert!(!res.ok);
+        assert!(res.content.contains("missing"));
+    }
+
+    fn make_outbox_call(args: Value) -> ToolCall {
+        ToolCall {
+            id: None,
+            kind: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "outbox_send".into(),
+                arguments: args,
+            },
+        }
+    }
+
+    #[test]
+    fn outbox_send_writes_push_event_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        let call = make_outbox_call(json!({
+            "target": "coord",
+            "kind": "completion_notice",
+            "summary": "task X done",
+            "priority": "high",
+        }));
+        let res = dispatch(&call, &ctx);
+        assert!(res.ok, "{}", res.content);
+        let v: Value = serde_json::from_str(&res.content).unwrap();
+        let path = v["path"].as_str().unwrap();
+        let payload = std::fs::read_to_string(path).unwrap();
+        let ev: PushEvent = serde_json::from_str(&payload).unwrap();
+        assert_eq!(ev.source_agent, "demo");
+        assert_eq!(ev.target_agent.as_deref(), Some("coord"));
+        assert_eq!(ev.kind, PushKind::CompletionNotice);
+        assert_eq!(ev.priority, Priority::High);
+        assert!(ev.id.starts_with("agent-demo-"));
+        assert_eq!(ev.summary, "task X done");
+    }
+
+    #[test]
+    fn outbox_send_accepts_hyphen_kind_alias() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        let call = make_outbox_call(json!({
+            "kind": "bug-fix-request",
+            "summary": "parser breaks on unicode",
+        }));
+        let res = dispatch(&call, &ctx);
+        assert!(res.ok);
+        let v: Value = serde_json::from_str(&res.content).unwrap();
+        let ev: PushEvent = serde_json::from_str(
+            &std::fs::read_to_string(v["path"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(ev.kind, PushKind::BugFixRequest);
+        assert!(ev.target_agent.is_none()); // broadcast
+    }
+
+    #[test]
+    fn outbox_send_rejects_bad_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        let res = dispatch(
+            &make_outbox_call(json!({"kind": "nope", "summary": "x"})),
+            &ctx,
+        );
+        assert!(!res.ok);
+        assert!(res.content.contains("feature_request"));
+    }
+
+    #[test]
+    fn outbox_send_rejects_bad_priority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        let res = dispatch(
+            &make_outbox_call(json!({
+                "kind": "needs_info",
+                "summary": "x",
+                "priority": "urgent",
+            })),
+            &ctx,
+        );
+        assert!(!res.ok);
+        assert!(res.content.contains("invalid priority"));
+    }
+
+    #[test]
+    fn inbox_ack_renames_matching_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        let inbox_dir = ctx.atn_dir.join(INBOXES_DIR).join(&ctx.agent_id);
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+        let src = inbox_dir.join("ev-42.json");
+        std::fs::write(&src, "{}").unwrap();
+        let call = ToolCall {
+            id: None,
+            kind: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "inbox_ack".into(),
+                arguments: json!({"message_id": "ev-42"}),
+            },
+        };
+        let res = dispatch(&call, &ctx);
+        assert!(res.ok, "{}", res.content);
+        assert!(!src.exists());
+        assert!(inbox_dir.join("ev-42.json.done").exists());
+    }
+
+    #[test]
+    fn inbox_ack_missing_file_is_clean_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ctx = test_ctx(tmp.path().to_path_buf());
+        ctx.atn_dir = tmp.path().join(".atn");
+        std::fs::create_dir_all(ctx.atn_dir.join(INBOXES_DIR).join(&ctx.agent_id)).unwrap();
+        let call = ToolCall {
+            id: None,
+            kind: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "inbox_ack".into(),
+                arguments: json!({"message_id": "no-such"}),
+            },
+        };
+        let res = dispatch(&call, &ctx);
+        assert!(!res.ok);
+        assert!(res.content.contains("not found"));
+    }
+
+    #[test]
+    fn inbox_ack_rejects_forbidden_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = test_ctx(tmp.path().to_path_buf());
+        for bad in ["", "../escape", "a/b", "..", "a\\b"] {
+            let call = ToolCall {
+                id: None,
+                kind: "function".into(),
+                function: crate::llm::ToolCallFunction {
+                    name: "inbox_ack".into(),
+                    arguments: json!({"message_id": bad}),
+                },
+            };
+            let res = dispatch(&call, &ctx);
+            assert!(!res.ok, "{bad} should have been rejected");
+        }
     }
 }
