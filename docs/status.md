@@ -1,6 +1,20 @@
 # All Together Now — Status
 
-## Current State: atn-cli Saga Complete
+## Current State: Dashboard-Polish Saga Complete
+
+Events view now has a client-side filter bar (text search + kind
+chips + delivered radio + `K / N entries` counter) and every event
+card click-expands to a full JSON detail panel. Escalation banners
+sprout a `jump to event ▸` link. The new **📖 Wiki panel** is a
+right-edge drawer that mirrors any wiki page beside the dashboard,
+ETag-polls every 5 s (with server-side `If-None-Match` → 304), and
+flashes on real changes. Event rows with a `wiki_link` reuse the
+open panel instead of opening a new tab. See
+[docs/events-view.md](./events-view.md) and
+[docs/windowed-ui.md § Wiki side panel](./windowed-ui.md#wiki-side-panel).
+Scripted walkthrough: [demos-scripts.md § Demo 11](./demos-scripts.md#demo-11--events-view--wiki-panel).
+
+## Prior Milestone: atn-cli Saga Complete
 
 Typed HTTP client `atn-cli` now wraps every REST endpoint the UI
 uses — agents lifecycle + observation, events list + send, wiki
@@ -99,6 +113,11 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | C3 | atn-cli: `events list` + `events send` | Done |
 | C4 | atn-cli: `wiki list`/`get`/`put`/`delete` with ETag handling | Done |
 | C5 | atn-cli: integration test + `docs/atn-cli.md` + Demo 10 + C1..C5 status rows | Done |
+| D1 | Dashboard polish: Events view filter chips + text search + delivered toggle | Done |
+| D2 | Dashboard polish: inline event-row expand + escalation `jump to event ▸` | Done |
+| D3 | Dashboard polish: global wiki side-panel (read-only) with page picker + persistence | Done |
+| D4 | Dashboard polish: wiki panel live updates (ETag / 304 / flash) + events-row cross-link | Done |
+| D5 | Dashboard polish: `docs/events-view.md` + windowed-ui.md wiki panel section + Demo 11 + D1..D5 | Done |
 
 ## Demo
 

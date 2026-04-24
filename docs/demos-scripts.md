@@ -32,6 +32,7 @@ time window.
 | 8 | Scale-UI fleet, 21 fake agents (legacy) | 5–15 min | No                    |
 | 9 | Windowed UI — layouts + pin + keyboard  | 5 min    | No                    |
 |10 | atn-cli tour — agents / events / wiki   | 5 min    | No                    |
+|11 | Events view polish + wiki side-panel    | 5 min    | No                    |
 
 What is **not** demoable yet: the Ollama / CUDA transports (future
 sagas). Everything else in the scale-UI saga (search, chips, grouping,
@@ -649,6 +650,92 @@ atn-cli agents delete cli
 
 ---
 
+## Demo 11 — Events view + wiki panel
+
+**What it shows** (dashboard-polish saga, steps 1–4)
+- Events view filter bar — text search, kind chips (OR), delivered
+  radio, `K / N entries` counter. Filter state persists.
+- Click-to-expand cards with full JSON, formatted timestamp + `Xm ago`
+  relative, linkified `wiki_link`. Only one card open at a time;
+  `Esc` collapses.
+- Escalation banners gain a `jump to event ▸` button that scrolls +
+  expands the matching card.
+- Global wiki side-panel (right-edge drawer, 340 px) with a page
+  picker; polls the open page every 5 s with `If-None-Match` and
+  flashes on real changes; pauses on tab hide / panel close.
+- Event row's `wiki_link` reuses the open panel instead of opening
+  a new tab.
+
+**Why it matters**
+- The Events log is where inter-agent coordination is legible.
+  Without filters and in-place detail, it degrades into a wall of
+  small rows as soon as agents start moving.
+- The wiki panel is the "reference beside the terminal" we always
+  wanted — one selected page stays visible across the agents
+  dashboard without swapping tabs.
+
+**Setup**
+```bash
+cargo build -p atn-server -p atn-cli
+cargo run -p atn-server       # leave running in another terminal
+export ATN_URL=http://localhost:7500
+```
+
+**Steps**
+1. Seed two agents + five events (mix of kinds, one escalation).
+   ```bash
+   for i in coord worker-hlasm; do
+     curl -sS -X POST -H 'Content-Type: application/json' \
+       -d "{\"name\":\"$i\",\"role\":\"${i%%-*}\",\"transport\":\"local\",\"working_dir\":\".\",\"project\":\"demo-11\",\"agent\":\"bash\"}" \
+       $ATN_URL/api/agents > /dev/null
+   done
+   atn-cli events send --from worker-hlasm --to coord --kind completion_notice --summary "task X done" --wiki-link Coordination__Goals
+   atn-cli events send --from worker-hlasm --to coord --kind bug_fix_request --summary "parser breaks on unicode" --issue-id ATN-42
+   atn-cli events send --from coord --to worker-hlasm --kind feature_request --summary "add watchdog"
+   atn-cli events send --from worker-hlasm --kind blocked_notice --summary "stuck on deploy" --priority high
+   atn-cli events send --from worker-hlasm --to ghost --kind needs_info --summary "who owns the watchdog?"
+   ```
+2. Open the dashboard → switch to the **Events** tab. You should see
+   four cards (three routed + one broadcast) plus an escalation banner
+   for the `needs_info` to the non-existent `ghost`.
+3. **Filter**. Type `hlasm` in the search box → narrows to the three
+   cards involving `worker-hlasm`. Clear it, toggle the `blocked` chip
+   → one card (`stuck on deploy`). Toggle `feature` too → two cards
+   (OR within the kind category). Press **✕ reset**.
+4. **Detail expand**. Click the `bug_fix_request` card → expands with
+   `Issue ID ATN-42`, pretty-printed JSON, timestamp. Press **Esc** →
+   collapses. Click the escalation banner's **`jump to event ▸`** →
+   the needs_info card scrolls into view and expands.
+5. **Wiki panel**. Click **📖 Wiki panel** in the top bar. Pick
+   `Coordination__Requests` from the dropdown — body swaps.
+6. **Live update**. In another terminal:
+   ```bash
+   ETAG=$(atn-cli --verbose wiki get Coordination__Goals 2>&1 >/dev/null \
+          | awk '/^ETag:/{print $2}')
+   printf '# Goals\n\n- Demo 11 edit at %s\n' "$(date -Iseconds)" \
+     | atn-cli wiki put Coordination__Goals --stdin --if-match "$ETAG"
+   ```
+   Switch the panel's dropdown back to `Coordination__Goals` — within
+   ~5 s the body re-renders and briefly flashes green.
+7. **Cross-link**. Expand the `read goals` completion card (or whichever
+   one has a `wiki_link`). Click its `Coordination__Goals` link — the
+   panel switches pages instead of opening a new tab.
+
+**Cleanup**
+```bash
+for id in coord worker-hlasm; do
+  curl -sS -X DELETE $ATN_URL/api/agents/$id
+done
+```
+
+**Variations**
+- Close the wiki panel, open devtools → **Network** tab, wait 10 s —
+  no `/api/wiki/` requests should fire (polling is paused).
+- Hard-refresh the browser after setting a filter + panel open —
+  both restore from `atn-window-ui-v1`.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
@@ -661,6 +748,10 @@ atn-cli agents delete cli
   one tool covers every REST endpoint with meaningful exit codes
   and `wait` for state polling. Demo 7 is still worth a quick
   detour if the audience wants to see the raw curl shapes.
+- **Coordination / long-running multi-agent flow**: Demo 11
+  (Events view polish + wiki side-panel) — show how the dashboard
+  scans a growing event log and keeps a reference wiki page live
+  alongside the agents.
 
 ## When new demos arrive
 
@@ -673,6 +764,8 @@ See also:
   demo in more depth
 - [docs/windowed-ui.md](./windowed-ui.md) — the windowed-UI walkthrough
   (primary model)
+- [docs/events-view.md](./events-view.md) — filter/search + detail
+  expand + wiki-link cross-reference
 - [docs/atn-cli.md](./atn-cli.md) — typed CLI reference + recipes
 - [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
   (legacy)

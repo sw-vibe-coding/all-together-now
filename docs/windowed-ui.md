@@ -160,6 +160,50 @@ The same shape works in the New Agent dialog's JSON payload:
 `stalled` + `stalled_for_secs` are reported alongside `state` in
 `GET /api/agents` and `GET /api/agents/{id}/state`.
 
+## Wiki side panel
+
+The top bar carries a **`📖 Wiki panel`** toggle. Click it to slide
+a 340 px drawer in from the right that mirrors a single wiki page
+alongside the dashboard. The drawer is `position: fixed` with
+`z-index: 20`, so it overlays the window grid without reflowing
+the tile math — pinned rects, stack primaries, carousel peeks all
+keep their positions.
+
+Contents:
+- **Page picker** dropdown populated from `GET /api/wiki`. Default
+  selection is the saved title → `Coordination__Goals` (if
+  present) → first page in the list.
+- **✕ close** button. `Esc` also closes the panel (after any
+  expanded event-row gets a chance to collapse; see
+  [events-view.md § Detail expand](./events-view.md#detail-expand)).
+- **Body** renders the server's `html` field from
+  `GET /api/wiki/{title}` — markdown already rendered server-side
+  with safe anchors.
+
+### Live updates
+
+While the panel is **open** and the browser tab is **visible**, a
+5 s poll fetches the selected page with `If-None-Match: <last-etag>`.
+The server returns `304 Not Modified` for unchanged pages (no
+re-render, no flash). On a real change (200 + fresh ETag), the
+body re-renders and briefly flashes green (`350 ms` keyframe) to
+signal the update. 404s (the page was deleted elsewhere) clear the
+body with a muted `(page deleted)` notice.
+
+Closing the panel **stops** the poll (next tick no-ops); so does
+hiding the tab. Returning to the tab kicks an immediate refresh
+so you don't sit on stale content.
+
+### Events cross-link
+
+When an event card in the Events view has a `wiki_link` in its
+detail row, clicking that link **reuses the open panel** instead
+of opening a new tab. If the panel is closed, the link falls
+through to its default behavior and opens `/wiki/<title>` in a new
+tab. This is how a `blocked_notice` event with
+`wiki_link = Coordination/Blockers` can pivot the panel to the
+exact reference page without leaving the dashboard.
+
 ## Persistence
 
 Windowed-UI state lives under `localStorage` key **`atn-window-ui-v1`**:
@@ -173,7 +217,13 @@ Windowed-UI state lives under `localStorage` key **`atn-window-ui-v1`**:
     "coordinator":   { "state": "normal", "pinned": true,
                        "pinnedRect": { "x": 4, "y": 4, "w": 763, "h": 735 } },
     "worker-hlasm":  { "state": "minimized" }
-  }
+  },
+  "eventsFilter": {
+    "text": "worker-hlasm",
+    "kinds": ["blocked_notice"],
+    "delivered": "all"
+  },
+  "wikiPanel": { "open": true, "title": "Coordination__Goals" }
 }
 ```
 
@@ -186,6 +236,8 @@ restores:
 - Selected window
 - Per-window minimize/maximize state
 - Pinned set + each pinned window's locked rect
+- Events-view filter (text search + kind chips + delivered)
+- Wiki side-panel open/closed + last-selected page title
 
 The legacy scale-UI bits (filter text, chips, group-by, saved named
 layouts, focus-size) continue to live under
