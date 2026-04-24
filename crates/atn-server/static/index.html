@@ -162,6 +162,46 @@
         .agent-compact .focus-hint { font-size: 9px; color: #4ecca3; flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
         .agent-compact:hover .focus-hint { opacity: 1; }
 
+        /* Wiki side panel — a fixed right-side drawer that overlays
+           the dashboard without reflowing the layout grid. Slides in
+           with a CSS transform so it never steals width from the
+           windowed-UI tile math. Read-only (writes go through the
+           Wiki tab or atn-cli wiki put). */
+        .wiki-side-panel-toggle { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; margin-left: 4px; }
+        .wiki-side-panel-toggle:hover { color: #e0e0e0; }
+        .wiki-side-panel-toggle.active { background: #0f3460; color: #4ecca3; border-color: #4ecca3; }
+        .wiki-side-panel {
+            position: fixed;
+            top: 48px;
+            right: 0;
+            bottom: 0;
+            width: 340px;
+            background: #16213e;
+            border-left: 1px solid #0f3460;
+            box-shadow: -6px 0 24px rgba(0, 0, 0, 0.4);
+            transform: translateX(100%);
+            transition: transform 0.18s ease-out;
+            display: flex;
+            flex-direction: column;
+            z-index: 20;
+        }
+        .wiki-side-panel.visible { transform: translateX(0); }
+        .wiki-side-panel .wsp-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+        .wiki-side-panel .wsp-select { flex: 1; min-width: 0; padding: 4px 6px; background: #0d1117; border: 1px solid #0f3460; border-radius: 4px; color: #e0e0e0; font-size: 12px; }
+        .wiki-side-panel .wsp-close { padding: 2px 8px; background: transparent; border: 1px solid #0f3460; border-radius: 4px; color: #888; cursor: pointer; font-size: 12px; line-height: 1; }
+        .wiki-side-panel .wsp-close:hover { color: #fca5a5; border-color: #7f1d1d; }
+        .wiki-side-panel .wsp-body { flex: 1; overflow-y: auto; padding: 12px 14px; font-size: 13px; line-height: 1.55; color: #c9d1d9; }
+        .wiki-side-panel .wsp-body h1, .wiki-side-panel .wsp-body h2, .wiki-side-panel .wsp-body h3 { color: #e0e0e0; margin: 10px 0 6px; }
+        .wiki-side-panel .wsp-body h1 { font-size: 16px; border-bottom: 1px solid #0f3460; padding-bottom: 4px; }
+        .wiki-side-panel .wsp-body h2 { font-size: 14px; }
+        .wiki-side-panel .wsp-body h3 { font-size: 13px; }
+        .wiki-side-panel .wsp-body a { color: #4ecca3; text-decoration: none; }
+        .wiki-side-panel .wsp-body a:hover { text-decoration: underline; }
+        .wiki-side-panel .wsp-body ul, .wiki-side-panel .wsp-body ol { padding-left: 22px; margin: 6px 0; }
+        .wiki-side-panel .wsp-body code { background: #0d1117; padding: 1px 4px; border-radius: 3px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+        .wiki-side-panel .wsp-empty { padding: 20px; text-align: center; color: #6b7280; font-size: 12px; }
+        .wiki-side-panel .wsp-error { padding: 12px 14px; color: #fca5a5; font-size: 12px; }
+
         /* View tabs */
         .view-tabs { display: flex; gap: 4px; margin-left: auto; }
         .view-tab { padding: 4px 12px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 12px; }
@@ -458,6 +498,7 @@
             <button class="carousel-btn" data-carousel="next" title="Next (→)">▶</button>
         </div>
         <span class="kbd-hint" id="kbd-hint">click header to select · <span class="kbd">m</span> min · <span class="kbd">M</span> max · <span class="kbd">p</span> pin · <span class="kbd">←/→</span> cycle · <span class="kbd">1..9</span> jump · <span class="kbd">Esc</span> clear</span>
+        <button class="wiki-side-panel-toggle" id="wiki-panel-toggle" title="Toggle wiki side panel">📖 Wiki panel</button>
         <div class="view-tabs">
             <button class="view-tab active" id="tab-agents" onclick="switchView('agents')">Agents</button>
             <button class="view-tab" id="tab-graph" onclick="switchView('graph')">Graph</button>
@@ -624,6 +665,18 @@
                 <div class="events-column-header">Agents <span class="col-arrow">&rarr;</span> Coordinator</div>
                 <div class="events-list" id="events-inbound"></div>
             </div>
+        </div>
+    </div>
+
+    <div class="wiki-side-panel" id="wiki-side-panel">
+        <div class="wsp-head">
+            <select class="wsp-select" id="wiki-panel-select" aria-label="Wiki page">
+                <option value="">(no pages yet)</option>
+            </select>
+            <button class="wsp-close" id="wiki-panel-close" title="Close wiki panel (Esc)">✕</button>
+        </div>
+        <div class="wsp-body" id="wiki-panel-body">
+            <div class="wsp-empty">Loading…</div>
         </div>
     </div>
 
@@ -1604,6 +1657,10 @@
                         kinds: Array.from(eventsFilter.kinds),
                         delivered: eventsFilter.delivered,
                     },
+                    wikiPanel: {
+                        open: wikiPanel.open,
+                        title: wikiPanel.title,
+                    },
                 });
                 localStorage.setItem(WINDOW_PREFS_KEY, data);
             } catch (_) { /* localStorage unavailable or full — ignore */ }
@@ -1652,6 +1709,11 @@
                     if (ef.delivered === 'all' || ef.delivered === 'delivered' || ef.delivered === 'undelivered') {
                         eventsFilter.delivered = ef.delivered;
                     }
+                }
+                if (data.wikiPanel && typeof data.wikiPanel === 'object') {
+                    const wp = data.wikiPanel;
+                    if (typeof wp.open === 'boolean') wikiPanel.open = wp.open;
+                    if (typeof wp.title === 'string' || wp.title === null) wikiPanel.title = wp.title;
                 }
             } catch (_) { /* malformed — drop */ }
         }
@@ -3003,6 +3065,7 @@
             refreshSavedLayoutsDropdown();
             setupLayoutSelector();
             setupEventsFilterBar();
+            setupWikiPanel();
             // Stack mode persisted from a prior session: reconcile stored
             // window state before the first layout so the primary vs.
             // minimized split is consistent with the layoutMode.
@@ -4025,9 +4088,11 @@
             setExpandedEvent(expandedEventId === id ? null : id);
         });
 
-        // Esc collapses the current expansion — but only when no
+        // Esc collapses the current event expansion or closes the
+        // wiki side panel — in that order — but only when no
         // input/textarea/xterm has focus, to stay consistent with the
-        // Option-C keyboard model.
+        // Option-C keyboard model. The window-management Esc (below)
+        // only runs when there's nothing else to close.
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
             if (isTypingTarget(e.target)) return;
@@ -4035,6 +4100,11 @@
             if (expandedEventId) {
                 e.preventDefault();
                 setExpandedEvent(null);
+                return;
+            }
+            if (wikiPanel.open) {
+                e.preventDefault();
+                toggleWikiPanel(false);
             }
         });
 
@@ -4046,6 +4116,124 @@
             if (!card) return;
             setExpandedEvent(id);
             card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        // ── Wiki side panel ─────────────────────────────────────
+        //
+        // Global collapsible right-side panel that mirrors a single
+        // wiki page alongside the dashboard. Read-only; writes go
+        // through the Wiki tab or `atn-cli wiki put`. Step 4 will
+        // wire ETag-based live updates + events-row cross-linking.
+
+        const wikiPanel = {
+            open: false,
+            title: null,
+        };
+
+        function wikiPanelElements() {
+            return {
+                panel: document.getElementById('wiki-side-panel'),
+                toggle: document.getElementById('wiki-panel-toggle'),
+                select: document.getElementById('wiki-panel-select'),
+                close: document.getElementById('wiki-panel-close'),
+                body: document.getElementById('wiki-panel-body'),
+            };
+        }
+
+        function syncWikiPanelToggle() {
+            const { toggle, panel } = wikiPanelElements();
+            if (toggle) toggle.classList.toggle('active', wikiPanel.open);
+            if (panel) panel.classList.toggle('visible', wikiPanel.open);
+        }
+
+        async function populateWikiPanelSelect() {
+            const { select } = wikiPanelElements();
+            if (!select) return;
+            try {
+                const res = await fetch(`${API_BASE}/api/wiki`);
+                if (!res.ok) return;
+                const titles = await res.json();
+                select.innerHTML = '';
+                if (!Array.isArray(titles) || titles.length === 0) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = '(no pages yet)';
+                    select.appendChild(opt);
+                    return;
+                }
+                for (const t of titles) {
+                    const opt = document.createElement('option');
+                    opt.value = t;
+                    opt.textContent = t;
+                    select.appendChild(opt);
+                }
+                // Pick a default: the saved title if still present,
+                // else Coordination__Goals, else the first page.
+                const saved = wikiPanel.title;
+                const goals = titles.find((t) => t === 'Coordination__Goals' || t === 'Coordination/Goals');
+                const fallback = goals || titles[0];
+                wikiPanel.title = (saved && titles.includes(saved)) ? saved : fallback;
+                select.value = wikiPanel.title;
+            } catch (_) { /* leave placeholder option */ }
+        }
+
+        async function loadWikiPanelPage(title) {
+            const { body } = wikiPanelElements();
+            if (!body) return;
+            if (!title) {
+                body.innerHTML = '<div class="wsp-empty">Pick a page above.</div>';
+                return;
+            }
+            body.innerHTML = '<div class="wsp-empty">Loading…</div>';
+            // Titles in the server's {*title} route go through as raw
+            // path segments. Storage uses `__` for `/`, so the REST
+            // path accepts either — we pass the raw title.
+            const url = `${API_BASE}/api/wiki/${title}`;
+            try {
+                const res = await fetch(url);
+                if (res.status === 404) {
+                    body.innerHTML = '<div class="wsp-error">Page not found.</div>';
+                    return;
+                }
+                if (!res.ok) {
+                    body.innerHTML = `<div class="wsp-error">Wiki fetch failed: ${res.status}</div>`;
+                    return;
+                }
+                const page = await res.json();
+                body.innerHTML = page.html || '<div class="wsp-empty">(empty page)</div>';
+            } catch (e) {
+                body.innerHTML = `<div class="wsp-error">${escHtml(String(e))}</div>`;
+            }
+        }
+
+        async function toggleWikiPanel(force) {
+            const next = typeof force === 'boolean' ? force : !wikiPanel.open;
+            wikiPanel.open = next;
+            syncWikiPanelToggle();
+            saveWindowUiPrefs();
+            if (next) {
+                await populateWikiPanelSelect();
+                await loadWikiPanelPage(wikiPanel.title);
+            }
+        }
+
+        function setupWikiPanel() {
+            const { toggle, select, close } = wikiPanelElements();
+            if (toggle) toggle.addEventListener('click', () => toggleWikiPanel());
+            if (close) close.addEventListener('click', () => toggleWikiPanel(false));
+            if (select) {
+                select.addEventListener('change', async () => {
+                    wikiPanel.title = select.value || null;
+                    saveWindowUiPrefs();
+                    await loadWikiPanelPage(wikiPanel.title);
+                });
+            }
+            syncWikiPanelToggle();
+            if (wikiPanel.open) {
+                // Prefs say the panel was open on last refresh —
+                // repopulate + fetch so the body is fresh.
+                populateWikiPanelSelect().then(() => loadWikiPanelPage(wikiPanel.title));
+            }
         }
 
         // Poll events every 5 seconds for new escalations (shown as badge on tab)
