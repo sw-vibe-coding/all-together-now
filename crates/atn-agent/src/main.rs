@@ -14,6 +14,7 @@
 //! - `2` inbox or outbox directory couldn't be created.
 
 mod llm;
+mod tools;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -25,6 +26,7 @@ use atn_core::inbox::ATN_DIR_NAME;
 use clap::Parser;
 
 use crate::llm::{ChatMessage, ChatRequest};
+use crate::tools::{ToolCtx, dispatch, tool_schemas};
 
 const EXIT_OK: u8 = 0;
 const EXIT_USAGE: u8 = 1;
@@ -138,8 +140,15 @@ fn run(cli: Cli) -> Result<u8, (u8, String)> {
         agent_id: cli.agent_id.clone(),
         base_url: cli.base_url.clone(),
         model: cli.model.clone(),
+        max_tool_iterations: cli.max_tool_iterations,
         dry_run: cli.dry_run,
         verbose: cli.verbose,
+        tool_ctx: ToolCtx {
+            workspace: cli.workspace.clone(),
+            agent_id: cli.agent_id.clone(),
+            atn_dir: cli.atn_dir.clone(),
+            allow_shell: cli.allow_shell,
+        },
     };
 
     // Production tear-down is SIGINT from ATN (Ctrl-C via the PTY).
@@ -165,8 +174,11 @@ struct PollCtx {
     agent_id: String,
     base_url: String,
     model: String,
+    /// Cap on tool-call iterations per inbox message.
+    max_tool_iterations: u32,
     dry_run: bool,
     verbose: bool,
+    tool_ctx: ToolCtx,
 }
 
 /// Resolve and validate the inbox directory path for an agent.
@@ -235,37 +247,7 @@ fn handle_inbox_file(path: &Path, ctx: &PollCtx) -> Result<(), String> {
     if ctx.dry_run {
         println!("atn-agent: would POST /api/chat for {}", msg.event.id);
     } else {
-        // Build the initial conversation from the inbox entry.
-        // Later saga steps (3–4) add tool schemas to the request and
-        // a tool-call dispatch loop around this single-turn send.
-        let req = ChatRequest {
-            model: ctx.model.clone(),
-            messages: vec![
-                ChatMessage::system(system_prompt_for(&ctx.agent_id)),
-                ChatMessage::user(user_prompt_for(&msg)),
-            ],
-            stream: false,
-            tools: None,
-        };
-        match llm::chat(&ctx.base_url, &req) {
-            Ok(resp) => {
-                let content = resp.message.content.trim();
-                if !content.is_empty() {
-                    println!("{content}");
-                }
-                if let Some(calls) = resp.message.tool_calls.as_ref() {
-                    // Step 2 reports tool-call requests but doesn't
-                    // dispatch them yet. Step 3 wires the loop in.
-                    for call in calls {
-                        println!(
-                            "atn-agent: model requested tool {name} (will dispatch in step 3)",
-                            name = call.function.name,
-                        );
-                    }
-                }
-            }
-            Err(e) => eprintln!("atn-agent: llm-error: {e}"),
-        }
+        run_tool_loop(&msg, ctx);
     }
 
     // Rename to .json.done so the next poll doesn't reprocess.
@@ -273,6 +255,78 @@ fn handle_inbox_file(path: &Path, ctx: &PollCtx) -> Result<(), String> {
     std::fs::rename(path, &done)
         .map_err(|e| format!("rename {path:?} -> {done:?}: {e}"))?;
     Ok(())
+}
+
+/// Drive the LLM conversation until the model stops asking for
+/// tools or we hit `--max-tool-iterations`. Silently logs LLM
+/// transport errors so the main poll loop keeps running.
+fn run_tool_loop(msg: &InboxMessage, ctx: &PollCtx) {
+    let mut messages = vec![
+        ChatMessage::system(system_prompt_for(&ctx.agent_id)),
+        ChatMessage::user(user_prompt_for(msg)),
+    ];
+    let tools = tool_schemas();
+
+    for iteration in 0..ctx.max_tool_iterations {
+        let req = ChatRequest {
+            model: ctx.model.clone(),
+            messages: messages.clone(),
+            stream: false,
+            tools: Some(tools.clone()),
+        };
+        let resp = match llm::chat(&ctx.base_url, &req) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("atn-agent: llm-error: {e}");
+                return;
+            }
+        };
+
+        // Surface any textual content the model returned this turn.
+        let content = resp.message.content.trim();
+        if !content.is_empty() {
+            println!("{content}");
+        }
+
+        // No tool calls → final assistant turn, exit the loop.
+        let Some(calls) = resp.message.tool_calls.clone() else {
+            return;
+        };
+        if calls.is_empty() {
+            return;
+        }
+
+        // Append the assistant's tool-call turn so the next request
+        // carries the full conversation (matches Ollama's expected
+        // multi-turn shape).
+        messages.push(resp.message.clone());
+
+        for call in &calls {
+            let tool_call_id = call
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("call-{iteration}-{}", call.function.name));
+            if ctx.verbose {
+                eprintln!(
+                    "atn-agent: tool {name} args={args}",
+                    name = call.function.name,
+                    args = call.function.arguments
+                );
+            }
+            let result = dispatch(call, &ctx.tool_ctx);
+            println!(
+                "atn-agent: tool {name} → {status}",
+                name = call.function.name,
+                status = if result.ok { "ok" } else { "err" },
+            );
+            messages.push(ChatMessage::tool(tool_call_id, result.content));
+        }
+    }
+
+    eprintln!(
+        "atn-agent: hit --max-tool-iterations={} for {}; stopping",
+        ctx.max_tool_iterations, msg.event.id
+    );
 }
 
 /// Canonical system prompt text. Named so step 3's tool-loop tests
@@ -335,8 +389,15 @@ mod tests {
             agent_id: "demo".into(),
             base_url: "http://unused".into(),
             model: "m".into(),
-            dry_run: true,  // skip LLM calls in tests
+            max_tool_iterations: 4,
+            dry_run: true, // skip LLM calls in tests
             verbose: false,
+            tool_ctx: ToolCtx {
+                workspace: PathBuf::from("."),
+                agent_id: "demo".into(),
+                atn_dir: PathBuf::from(".atn"),
+                allow_shell: false,
+            },
         }
     }
 
