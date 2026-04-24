@@ -1,58 +1,78 @@
-ATN — Ops Polish
+ATN — atn-cli
 
-Operational robustness + visibility improvements that stack cleanly:
-(a) shell-escape fix for coordinator commands, (b) terminal snapshot
-tooling so diagnostic captures don't require a replay crate invocation,
-and (c) per-agent watchdog for stall/liveness detection.
+A Rust CLI that wraps the ATN HTTP API so demo scripts and
+integrations don't have to hand-roll curl + jq. Matches the sketch
+in docs/needed-tools.md §1 but adds the step-3 screenshot endpoint.
+
+## Why
+
+- Demo scripts lean on `curl` + `jq` for agent spawn/input/state
+  polling. That works but mixes JSON-escaping, status-code checks,
+  and argv quoting in shell. A typed CLI collapses that into
+  readable commands with clean exit codes.
+- Wait-for-state loops (`while state != idle; do sleep; done`) are
+  fragile. A `wait` subcommand with structured AgentState parsing,
+  timeout, and exponential backoff is the right primitive.
+- The screenshot endpoint (ops-polish step 3) needs a consumer —
+  `atn-cli agents screenshot <id>` makes it usable from scripts
+  without manual URL construction.
 
 ## Steps
 
-1. priority-escape — fix the `(priority: High)` shell syntax error.
-   Canned-command formatting bakes raw values into shell-interpreted
-   strings; parens, `<`, `>`, `$`, `"`, `'`, `\`, spaces can all break
-   the PTY write. Audit every `coordinator_command` / canned-action
-   emitter (CannedAction, any `format!` that builds a shell line),
-   introduce a `shell_escape` helper (prefer single-quote-then-insert
-   style), add table-driven unit tests for the escapers. Fixes the
-   known-issue in docs/status.md.
+1. cli-scaffold — new `atn-cli` crate + clap derive + sync HTTP
+   client (ureq or reqwest blocking) + `--base-url` flag +
+   `ATN_URL` env. First subcommands: `agents list` (table or
+   `--format json`) and `agents state <id>`. JSON pretty-print for
+   diagnostics; table formatter for humans.
 
-2. pty-screenshot-core — `vte`-driven terminal snapshot. New module
-   (likely under `atn-pty` as `snapshot.rs`, or a thin shared helper
-   used by both atn-server and atn-replay) that takes the last-N
-   transcript bytes (or a live stream tap) and renders the current
-   terminal grid as plain text / ansi / html. Factor out anything
-   that's already in atn-replay to avoid duplication.
+2. cli-agents-actions — input/stop/restart/wait/screenshot:
+   - `atn-cli agents input <id> <text>` — POSTs HumanText.
+   - `atn-cli agents input <id> --stdin` — read text from stdin.
+   - `atn-cli agents stop <id>` / `atn-cli agents restart <id>` —
+     POST the corresponding endpoint.
+   - `atn-cli agents wait <id> [--state idle|running|awaiting-input]
+      [--timeout 30]` — poll with exponential backoff, exit 0 on
+     match, non-zero on timeout.
+   - `atn-cli agents screenshot <id> [--format text|ansi|html]
+      [--rows N] [--cols N]` — fetch screenshot, print to stdout
+     (respecting content-type from the endpoint).
 
-3. pty-screenshot-endpoint — `GET /api/agents/{id}/screenshot?format=text|ansi|html&rows=40&cols=120`,
-   backed by the current transcript. Returns text/plain by default.
-   Stable shape so atn-cli (next saga) can wrap it. Integration test
-   against the 3-agent demo fixture.
+3. cli-events — list + send:
+   - `atn-cli events list [--since N] [--format json|table]`.
+   - `atn-cli events send --from <agent> [--to <agent>] --kind <kind>
+      --summary <text> [--priority normal|high|blocking]` — build
+     a PushEvent with auto-generated id + RFC3339 timestamp, POST
+     to /api/events. Validates the kind enum client-side.
 
-4. pty-screenshot-ui — `📸` icon in each window chrome next to the
-   existing action icons; click opens the snapshot in a new tab (so
-   the user can copy/paste the text). Hovering the icon shows a
-   tooltip with the endpoint URL. `window.snapshotAgent(id)` exposed
-   for devtools.
+4. cli-wiki — list/get/put/delete + ETag handling:
+   - `atn-cli wiki list` — GET /api/wiki.
+   - `atn-cli wiki get <title>` — GET /api/wiki/<title> (prints
+     body + ETag header to stderr with --verbose).
+   - `atn-cli wiki put <title> [--file path | --stdin]
+      [--if-match <etag>]` — PUT with the content body.
+   - `atn-cli wiki delete <title> [--if-match <etag>]` — DELETE.
+   - On 412 Precondition Failed, print a concise
+     "ETag mismatch — refetch and retry" message and exit 2.
 
-5. watchdog-core — per-agent output-stall detection (>N seconds no
-   output while state is `running`) + process-liveness check.
-   Configurable per agent (`watchdog.stall_secs`,
-   `watchdog.max_running_secs` in SpawnSpec). Pipes a new
-   `OutputSignal::Stalled` into the state tracker so it's visible
-   alongside Disconnected/Idle.
-
-6. watchdog-actions — on stall, send Ctrl-C; on repeat-stall within
-   a window, post a `blocked_notice` push event (routes to
-   coordinator) and optionally restart the agent. Stalled state
-   paints an amber outline on the window chrome + the sparkline-row
-   cell. Dashboard shows a "stalled" badge near the state chip.
+5. cli-integration-and-docs — integration tests + docs/atn-cli.md +
+   Demo 10 in docs/demos-scripts.md + cross-links.
+   - `crates/atn-cli/tests/integration.rs` boots a fresh atn-server
+     on an ephemeral port, spawns a fake-claude, then exercises
+     agents list / input / wait / screenshot + events send + wiki
+     get/put end-to-end with `Command::new` against the just-built
+     `atn-cli` binary.
+   - `docs/atn-cli.md` documents every subcommand with examples
+     (replicating the shapes used by the demo scripts).
+   - `docs/demos-scripts.md` gains **Demo 10 — atn-cli tour** and
+     the "Picking one for a short slot" section gets a cli-first
+     option.
 
 ## Success metrics
 
-- Canned commands with `(priority: X)` round-trip through a bash PTY
-  intact (verified via integration test).
-- `/api/agents/<id>/screenshot` returns a useful plain-text snapshot
-  for any agent with ≥1 line of output.
-- A manually-stalled fake-shim agent triggers Ctrl-C within
-  watchdog.stall_secs and posts a `blocked_notice`.
-- cargo test + clippy + doc clean.
+- `atn-cli agents list` matches the web dashboard's view.
+- `atn-cli agents wait <id> --state idle --timeout 10` returns 0
+  within a few seconds after spawn or non-zero on timeout.
+- Integration test boots a real server and passes end-to-end.
+- cargo test + clippy + doc warning-free.
+- No changes to existing demo scripts in this saga — `atn-cli`
+  adoption can happen in a follow-up once the tool has soaked.

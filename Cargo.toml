@@ -8,6 +8,7 @@ members = [
     "crates/atn-wiki",
     "crates/atn-trail",
     "crates/atn-replay",
+    "crates/atn-cli",
 ]
 
 [workspace.package]
@@ -34,6 +35,8 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures-core = "0.3"
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 vt100 = "0.15"
+clap = { version = "4", features = ["derive"] }
+ureq = { version = "2", features = ["json"] }
 wiki-common = { path = "../wiki-rs/shared/wiki-common", features = ["server"] }
 
 # Internal crates

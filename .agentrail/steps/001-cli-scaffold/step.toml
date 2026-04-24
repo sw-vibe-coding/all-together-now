@@ -1,0 +1,12 @@
+number = 1
+slug = "cli-scaffold"
+status = "in-progress"
+description = """
+## Step 1: atn-cli scaffold + agents list/state
+
+Stand up the `atn-cli` crate..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T17:23:12"
+task_type = "rust-workspace-setup"
+commits = []
