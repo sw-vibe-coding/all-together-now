@@ -13,6 +13,8 @@
 //! - `1` bad CLI args / workspace resolution error.
 //! - `2` inbox or outbox directory couldn't be created.
 
+mod llm;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -21,6 +23,8 @@ use atn_core::inbox::{INBOXES_DIR, InboxMessage};
 #[cfg(test)]
 use atn_core::inbox::ATN_DIR_NAME;
 use clap::Parser;
+
+use crate::llm::{ChatMessage, ChatRequest};
 
 const EXIT_OK: u8 = 0;
 const EXIT_USAGE: u8 = 1;
@@ -128,13 +132,22 @@ fn run(cli: Cli) -> Result<u8, (u8, String)> {
         );
     }
 
+    // Package per-call context so `handle_inbox_file` doesn't have
+    // to take the whole CLI.
+    let ctx = PollCtx {
+        agent_id: cli.agent_id.clone(),
+        base_url: cli.base_url.clone(),
+        model: cli.model.clone(),
+        dry_run: cli.dry_run,
+        verbose: cli.verbose,
+    };
+
     // Production tear-down is SIGINT from ATN (Ctrl-C via the PTY).
     // Rust's default handler exits the process cleanly, which is
     // exactly what ATN's restart/shutdown path expects. Tests use
     // `--exit-on-empty` to run one-shot without a signal.
     loop {
-        let handled = poll_inbox_once(&inbox_dir, cli.verbose, cli.dry_run)
-            .map_err(|e| (EXIT_IO, e))?;
+        let handled = poll_inbox_once(&inbox_dir, &ctx).map_err(|e| (EXIT_IO, e))?;
         if cli.exit_on_empty && handled == 0 {
             if cli.verbose {
                 eprintln!("atn-agent: --exit-on-empty + no messages, exiting");
@@ -143,6 +156,17 @@ fn run(cli: Cli) -> Result<u8, (u8, String)> {
         }
         std::thread::sleep(Duration::from_secs(cli.inbox_poll_secs));
     }
+}
+
+/// Per-poll-cycle context threaded through handle_inbox_file. Kept
+/// small so tests can construct one without spinning up the full CLI.
+#[derive(Clone, Debug)]
+struct PollCtx {
+    agent_id: String,
+    base_url: String,
+    model: String,
+    dry_run: bool,
+    verbose: bool,
 }
 
 /// Resolve and validate the inbox directory path for an agent.
@@ -162,8 +186,8 @@ pub(crate) fn resolve_inbox_dir(atn_dir: &Path, agent_id: &str) -> Result<PathBu
 }
 
 /// Scan the inbox once. Returns the number of handled messages.
-fn poll_inbox_once(inbox_dir: &Path, verbose: bool, dry_run: bool) -> Result<usize, String> {
-    if verbose {
+fn poll_inbox_once(inbox_dir: &Path, ctx: &PollCtx) -> Result<usize, String> {
+    if ctx.verbose {
         eprintln!("atn-agent: polling {}", inbox_dir.display());
     }
     let entries = match std::fs::read_dir(inbox_dir) {
@@ -184,12 +208,12 @@ fn poll_inbox_once(inbox_dir: &Path, verbose: bool, dry_run: bool) -> Result<usi
     paths.sort();
     let handled = paths.len();
     for path in paths {
-        handle_inbox_file(&path, dry_run)?;
+        handle_inbox_file(&path, ctx)?;
     }
     Ok(handled)
 }
 
-fn handle_inbox_file(path: &Path, dry_run: bool) -> Result<(), String> {
+fn handle_inbox_file(path: &Path, ctx: &PollCtx) -> Result<(), String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("read {path:?}: {e}"))?;
     let msg: InboxMessage = match serde_json::from_str(&raw) {
@@ -207,14 +231,78 @@ fn handle_inbox_file(path: &Path, dry_run: bool) -> Result<(), String> {
         id = msg.event.id,
         summary = msg.event.summary.replace('\n', " ").chars().take(160).collect::<String>(),
     );
-    if dry_run {
+
+    if ctx.dry_run {
         println!("atn-agent: would POST /api/chat for {}", msg.event.id);
+    } else {
+        // Build the initial conversation from the inbox entry.
+        // Later saga steps (3–4) add tool schemas to the request and
+        // a tool-call dispatch loop around this single-turn send.
+        let req = ChatRequest {
+            model: ctx.model.clone(),
+            messages: vec![
+                ChatMessage::system(system_prompt_for(&ctx.agent_id)),
+                ChatMessage::user(user_prompt_for(&msg)),
+            ],
+            stream: false,
+            tools: None,
+        };
+        match llm::chat(&ctx.base_url, &req) {
+            Ok(resp) => {
+                let content = resp.message.content.trim();
+                if !content.is_empty() {
+                    println!("{content}");
+                }
+                if let Some(calls) = resp.message.tool_calls.as_ref() {
+                    // Step 2 reports tool-call requests but doesn't
+                    // dispatch them yet. Step 3 wires the loop in.
+                    for call in calls {
+                        println!(
+                            "atn-agent: model requested tool {name} (will dispatch in step 3)",
+                            name = call.function.name,
+                        );
+                    }
+                }
+            }
+            Err(e) => eprintln!("atn-agent: llm-error: {e}"),
+        }
     }
+
     // Rename to .json.done so the next poll doesn't reprocess.
     let done = path.with_extension("json.done");
     std::fs::rename(path, &done)
         .map_err(|e| format!("rename {path:?} -> {done:?}: {e}"))?;
     Ok(())
+}
+
+/// Canonical system prompt text. Named so step 3's tool-loop tests
+/// can assert on the wording without grepping the main loop.
+pub(crate) fn system_prompt_for(agent_id: &str) -> String {
+    format!(
+        "You are ATN agent {agent_id}. You coordinate with other agents via an \
+         inbox (messages arrive as InboxMessage JSON) and an outbox (send via \
+         tool calls). Tools available: file_read, file_write, shell_exec, \
+         outbox_send, inbox_ack. When you're done with a message, stop calling \
+         tools and reply with a short status line."
+    )
+}
+
+/// Build the user prompt from an inbox message. Includes sender,
+/// summary, and the optional wiki_link so the model has context
+/// without re-opening /api/wiki.
+pub(crate) fn user_prompt_for(msg: &InboxMessage) -> String {
+    let mut out = format!(
+        "[from {from}] {summary}",
+        from = msg.event.source_agent,
+        summary = msg.event.summary
+    );
+    if let Some(link) = msg.event.wiki_link.as_ref() {
+        out.push_str(&format!("\n\nSee: {link}"));
+    }
+    if let Some(issue) = msg.event.issue_id.as_ref() {
+        out.push_str(&format!("\nIssue: {issue}"));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -242,12 +330,22 @@ mod tests {
         }
     }
 
+    fn test_ctx() -> PollCtx {
+        PollCtx {
+            agent_id: "demo".into(),
+            base_url: "http://unused".into(),
+            model: "m".into(),
+            dry_run: true,  // skip LLM calls in tests
+            verbose: false,
+        }
+    }
+
     #[test]
     fn poll_inbox_handles_empty_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let inbox = resolve_inbox_dir(tmp.path(), "demo").unwrap();
         std::fs::create_dir_all(&inbox).unwrap();
-        assert_eq!(poll_inbox_once(&inbox, false, false).unwrap(), 0);
+        assert_eq!(poll_inbox_once(&inbox, &test_ctx()).unwrap(), 0);
     }
 
     #[test]
@@ -277,7 +375,7 @@ mod tests {
             serde_json::to_string_pretty(&msg).unwrap(),
         )
         .unwrap();
-        assert_eq!(poll_inbox_once(&inbox, false, true).unwrap(), 1);
+        assert_eq!(poll_inbox_once(&inbox, &test_ctx()).unwrap(), 1);
         assert!(inbox.join("ev-1.json.done").exists());
         assert!(!inbox.join("ev-1.json").exists());
     }
@@ -290,8 +388,42 @@ mod tests {
         std::fs::write(inbox.join("bad.json"), "{not-json").unwrap();
         // Handler counts the file as "handled" (we iterated it) but
         // leaves it on disk for the operator to inspect.
-        assert_eq!(poll_inbox_once(&inbox, false, false).unwrap(), 1);
+        assert_eq!(poll_inbox_once(&inbox, &test_ctx()).unwrap(), 1);
         assert!(inbox.join("bad.json").exists());
+    }
+
+    #[test]
+    fn system_prompt_names_the_agent() {
+        let p = system_prompt_for("worker-hlasm");
+        assert!(p.contains("worker-hlasm"));
+        assert!(p.contains("file_read"));
+        assert!(p.contains("outbox_send"));
+    }
+
+    #[test]
+    fn user_prompt_includes_source_and_summary() {
+        use atn_core::event::{Priority, PushEvent, PushKind};
+        let msg = InboxMessage {
+            event: PushEvent {
+                id: "ev-1".into(),
+                kind: PushKind::FeatureRequest,
+                source_agent: "coord".into(),
+                source_repo: ".".into(),
+                target_agent: Some("demo".into()),
+                issue_id: Some("ATN-42".into()),
+                summary: "build the thing".into(),
+                wiki_link: Some("Coordination/Goals".into()),
+                priority: Priority::Normal,
+                timestamp: "2026-04-24T10:00:00Z".into(),
+            },
+            delivered: true,
+            delivered_at: None,
+        };
+        let p = user_prompt_for(&msg);
+        assert!(p.starts_with("[from coord]"));
+        assert!(p.contains("build the thing"));
+        assert!(p.contains("See: Coordination/Goals"));
+        assert!(p.contains("Issue: ATN-42"));
     }
 
     // Sanity check that ATN_DIR_NAME is still what we expect —
