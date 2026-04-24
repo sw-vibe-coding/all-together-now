@@ -9,6 +9,7 @@ members = [
     "crates/atn-trail",
     "crates/atn-replay",
     "crates/atn-cli",
+    "crates/atn-agent",
 ]
 
 [workspace.package]

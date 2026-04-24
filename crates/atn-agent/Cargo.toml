@@ -1,0 +1,19 @@
+[package]
+name = "atn-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "atn-agent"
+path = "src/main.rs"
+
+[dependencies]
+atn-core = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

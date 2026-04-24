@@ -106,6 +106,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "atn-agent"
+version = "0.1.0"
+dependencies = [
+ "atn-core",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "atn-cli"
 version = "0.1.0"
 dependencies = [
