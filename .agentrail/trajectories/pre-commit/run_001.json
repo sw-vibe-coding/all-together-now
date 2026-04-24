@@ -1,0 +1,11 @@
+{
+  "task_type": "pre-commit",
+  "state": {
+    "number": 5,
+    "step": "cli-integration-and-docs"
+  },
+  "action": "Added crates/atn-cli/tests/integration.rs with a single ~2s end-to-end test: ServerGuard boots atn-server on ATN_PORT=0 with tools/ on PATH, captures port from 'atn-server ready on' stdout, drives agents list (empty) → curl_post REST seed → agents wait any-non-starting → input + wait idle → screenshot poll for HELLO_FROM_CLI → state --format json + unknown-id exit 2 → events send + list poll → bad kind exit 1 → wiki get seeded → --verbose wiki get captures ETag from stderr → put --stdin --if-match valid → stale-etag exit 2 → scratch page create/delete/get-after-delete exit 2. run_cli helper wraps Command::new(env!(CARGO_BIN_EXE_atn-cli)) with stdin piping. Added tempfile to atn-cli dev-dependencies. Wrote docs/atn-cli.md with base-URL resolution, exit codes, per-group reference, 3 script recipes (wait-all-idle, tail-since, ETag retry). Edited docs/demos-scripts.md: added Demo 10 with 6-step flow mirroring the integration test, index row, updated Picking-one section, added atn-cli.md to See-also. Edited docs/status.md: Current State → atn-cli Saga Complete, Windowed-UI → Prior Milestone, added C1..C5 + O1..O6 rows, atn-cli in What Exists, 8 crates in architecture list. cargo test/clippy/doc clean across workspace.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T18:01:49"
+}

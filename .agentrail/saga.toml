@@ -1,5 +1,5 @@
 name = "atn-cli"
-status = "active"
+status = "completed"
 current_step = 5
 created_at = "2026-04-23T17:22:59"
 plan_file = ".agentrail/plan.md"
