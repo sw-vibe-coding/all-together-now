@@ -33,6 +33,7 @@ time window.
 | 9 | Windowed UI — layouts + pin + keyboard  | 5 min    | No                    |
 |10 | atn-cli tour — agents / events / wiki   | 5 min    | No                    |
 |11 | Events view polish + wiki side-panel    | 5 min    | No                    |
+|12 | atn-agent end-to-end (stub or Ollama)   | 5 min    | No                    |
 
 What is **not** demoable yet: the Ollama / CUDA transports (future
 sagas). Everything else in the scale-UI saga (search, chips, grouping,
@@ -736,6 +737,84 @@ done
 
 ---
 
+## Demo 12 — atn-agent end-to-end
+
+**What it shows** (atn-agent saga, steps 1–5)
+- Rust-native agent wrapper polling an inbox, calling an Ollama-
+  compatible `/api/chat` with tool schemas, dispatching the model's
+  tool_calls (`file_read`, `file_write`, `shell_exec`,
+  `outbox_send`, `inbox_ack`) against a workspace sandbox, and
+  exiting cleanly after the message is handled.
+- Two run modes: **stub** (hand-rolled HTTP listener with canned
+  tool-call responses — no Ollama install required, runs as part
+  of `cargo test`) and **real** (talks to a live Ollama on
+  `localhost:11434`).
+
+**Why it matters**
+- Demos outside `fake-*` shims can now run a real tool-calling
+  agent in pure Rust, no Python/Node. The integration test doubles
+  as a reproducible demo anyone can run with `cargo test`.
+
+**Setup (stub mode — no install required)**
+```bash
+./demos/atn-agent/setup.sh --stub
+```
+
+**Setup (Ollama mode)**
+```bash
+# Start Ollama separately:
+brew install ollama   # macOS; or follow ollama.com instructions
+ollama pull qwen3:8b
+ollama serve
+
+# Then:
+MODEL=qwen3:8b ./demos/atn-agent/setup.sh
+```
+
+**Steps (stub mode — what `--stub` runs under you)**
+1. The script builds `atn-agent` + `atn-cli`, seeds an inbox
+   message `ev-demo` with `summary = "write a notes.md and tell
+   coord when done"`, and spawns a TCP-listener HTTP stub that
+   answers `/api/chat` with three canned responses:
+     (a) model calls `file_write({path: "notes.md", content: …})`
+     (b) model calls `outbox_send(target=coord, kind=completion_notice,
+         summary="wrote notes.md")`
+     (c) model returns plain "all done" text; loop exits.
+2. `atn-agent` prints:
+   ```
+   atn-agent: demo up (model=stub-model, base_url=http://127.0.0.1:…)
+   inbox: ev-demo — write a notes.md …
+   atn-agent: tool file_write → ok
+   atn-agent: tool outbox_send → ok
+   all done
+   ```
+3. Afterwards:
+   - `notes.md` exists in the workspace.
+   - `.atn/outboxes/demo/agent-demo-<millis>.json` carries a real
+     `PushEvent` the message router would pick up.
+   - `.atn/inboxes/demo/ev-demo.json.done` replaces the seed file.
+
+**Steps (Ollama mode)**
+- Same seed, same inbox / outbox layout, real model response.
+  The outbox file may or may not appear depending on whether the
+  model chose to call `outbox_send`; models are models. The script
+  prints the inbox, outbox, and workspace state after the run.
+
+**Cleanup**
+```bash
+rm -rf .atn-demo-atn-agent
+```
+
+**Variations**
+- Add `--allow-shell` for the model to run `uname -a` / `git status`
+  etc. — the stub test includes a variant that shows the disabled
+  path (model calls `shell_exec`, tool returns `{disabled: true}`,
+  model recovers).
+- Point `--base-url` at an opencode-compatible endpoint — the
+  `/api/chat` shape is the same.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
@@ -752,6 +831,9 @@ done
   (Events view polish + wiki side-panel) — show how the dashboard
   scans a growing event log and keeps a reference wiki page live
   alongside the agents.
+- **Rust-native AI-agent story**: Demo 12 (atn-agent). `--stub`
+  mode is the fastest path to "how does a tool-calling agent
+  interact with ATN" without any model install.
 
 ## When new demos arrive
 
@@ -767,6 +849,8 @@ See also:
 - [docs/events-view.md](./events-view.md) — filter/search + detail
   expand + wiki-link cross-reference
 - [docs/atn-cli.md](./atn-cli.md) — typed CLI reference + recipes
+- [docs/atn-agent.md](./atn-agent.md) — Rust-native agent wrapper
+  (Ollama `/api/chat` + tool-calling)
 - [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
   (legacy)
 - [docs/remote-pty.md](./remote-pty.md) — manual remote PTY

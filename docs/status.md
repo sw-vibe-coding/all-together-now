@@ -1,6 +1,21 @@
 # All Together Now — Status
 
-## Current State: Dashboard-Polish Saga Complete
+## Current State: atn-agent Saga Complete
+
+New Rust-native agent wrapper `atn-agent` runs as an ATN
+`launch_command`, polls `<atn-dir>/inboxes/<id>/` for messages,
+and drives an Ollama-compatible `/api/chat` tool-calling loop.
+Five tools (`file_read`, `file_write`, `shell_exec`,
+`outbox_send`, `inbox_ack`) back the standard agent workflow:
+read/write workspace files in a sandbox, run shell behind an
+`--allow-shell` gate with timeout + output cap, emit `PushEvent`s
+into the router's outbox, and explicitly ack inbox messages.
+39 unit tests + 2 end-to-end integration tests (stubbed
+`/api/chat` server, no Ollama required). See
+[docs/atn-agent.md](./atn-agent.md) and
+[demos-scripts.md § Demo 12](./demos-scripts.md#demo-12--atn-agent-end-to-end).
+
+## Prior Milestone: Dashboard-Polish Saga Complete
 
 Events view now has a client-side filter bar (text search + kind
 chips + delivered radio + `K / N entries` counter) and every event
@@ -71,6 +86,7 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | `atn-trail` | Complete | Agentrail file reader + CLI wrapper |
 | `atn-replay` | Complete | PTY transcript viewer: screenshot, dashboard (org-mode), HTML output |
 | `atn-cli` | Complete | Typed HTTP client for every REST endpoint (agents / events / wiki) |
+| `atn-agent` | Complete | Rust-native AI-agent wrapper (Ollama `/api/chat` + 5 tools) |
 | `atn-ui` | Placeholder | Yew frontend (server uses embedded static HTML) |
 
 ## Phase Summary
@@ -118,6 +134,11 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | D3 | Dashboard polish: global wiki side-panel (read-only) with page picker + persistence | Done |
 | D4 | Dashboard polish: wiki panel live updates (ETag / 304 / flash) + events-row cross-link | Done |
 | D5 | Dashboard polish: `docs/events-view.md` + windowed-ui.md wiki panel section + Demo 11 + D1..D5 | Done |
+| A1 | atn-agent scaffold: crate + clap CLI + banner + inbox poll + .json.done rename | Done |
+| A2 | atn-agent: Ollama `/api/chat` integration (typed shapes + 60 s timeout + URL-echoing errors) | Done |
+| A3 | atn-agent: `file_read` + `file_write` tools + path sandboxing + tool-call dispatch loop | Done |
+| A4 | atn-agent: `shell_exec` (gated, 30 s timeout, 4 KiB cap) + `outbox_send` + `inbox_ack` tools | Done |
+| A5 | atn-agent: integration test (stub HTTP) + `docs/atn-agent.md` + Demo 12 + A1..A5 status rows | Done |
 
 ## Demo
 
@@ -152,7 +173,7 @@ Three log files per agent in `.atn/logs/{agent_id}/`:
 
 ## Architecture
 
-Cargo workspace with 8 crates (library-first design):
+Cargo workspace with 9 crates (library-first design):
 - **atn-core**: pure domain types, no async, no I/O
 - **atn-pty**: PTY session lifecycle via portable-pty + tokio
 - **atn-server**: Axum binary with REST + SSE + embedded static UI
@@ -160,6 +181,7 @@ Cargo workspace with 8 crates (library-first design):
 - **atn-trail**: agentrail file reader and CLI wrapper
 - **atn-replay**: PTY transcript rendering (vt100 + clap)
 - **atn-cli**: typed HTTP client for the REST API (clap + ureq)
+- **atn-agent**: Rust-native AI-agent wrapper (clap + ureq + Ollama /api/chat)
 - **atn-ui**: Yew components (placeholder)
 
 ## Known Issues
