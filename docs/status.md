@@ -1,6 +1,16 @@
 # All Together Now — Status
 
-## Current State: Windowed-UI Saga Complete
+## Current State: atn-cli Saga Complete
+
+Typed HTTP client `atn-cli` now wraps every REST endpoint the UI
+uses — agents lifecycle + observation, events list + send, wiki
+list/get/put/delete with ETag round-trips. Replaces the `curl +
+jq` loops that were accumulating across the demo scripts. See
+[docs/atn-cli.md](./atn-cli.md) for the full reference and
+[demos-scripts.md § Demo 10](./demos-scripts.md#demo-10--atn-cli-tour)
+for a scripted walkthrough.
+
+## Prior Milestone: Windowed-UI Saga Complete
 
 The dashboard now ships a desktop-window-manager model (Tiled / Stack
 / Carousel + per-window chrome + keyboard Option C). The heat-sized
@@ -46,6 +56,7 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | `atn-wiki` | Complete | FileWikiStorage + coordination page seeding |
 | `atn-trail` | Complete | Agentrail file reader + CLI wrapper |
 | `atn-replay` | Complete | PTY transcript viewer: screenshot, dashboard (org-mode), HTML output |
+| `atn-cli` | Complete | Typed HTTP client for every REST endpoint (agents / events / wiki) |
 | `atn-ui` | Placeholder | Yew frontend (server uses embedded static HTML) |
 
 ## Phase Summary
@@ -77,6 +88,17 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | W4 | Carousel layout: primary + prev/next peeks + `◀/▶` cycle (excludes minimized) | Done |
 | W5 | Keyboard Option C: `m`/`M`/`p`/`←→`/`1..9`/`Esc` on selected, guarded by xterm focus | Done |
 | W6 | Persistence (`atn-window-ui-v1`) + sort selector + `docs/windowed-ui.md` + `demos/windowed-ui/setup.sh` + Demo 9 + scale-ui.md legacy banner | Done |
+| O1 | Ops-polish: shell-escape CannedAction page + request_id (fixes `(priority: High)` bash bug) | Done |
+| O2 | Ops-polish: `atn_pty::snapshot` vt100 renderer (text / ANSI / HTML) | Done |
+| O3 | Ops-polish: `GET /api/agents/{id}/screenshot` + router flake fix | Done |
+| O4 | Ops-polish: 📸 snapshot button in the window chrome | Done |
+| O5 | Ops-polish: per-agent output-stall watchdog + `stalled` / `stalled_for_secs` in state | Done |
+| O6 | Ops-polish: watchdog actions — Ctrl-C + `blocked_notice` + amber pulsing UI badge | Done |
+| C1 | atn-cli scaffold: crate + clap + ureq + `agents list`/`state` | Done |
+| C2 | atn-cli: `agents input`/`stop`/`restart`/`reconnect`/`delete`/`wait`/`screenshot` | Done |
+| C3 | atn-cli: `events list` + `events send` | Done |
+| C4 | atn-cli: `wiki list`/`get`/`put`/`delete` with ETag handling | Done |
+| C5 | atn-cli: integration test + `docs/atn-cli.md` + Demo 10 + C1..C5 status rows | Done |
 
 ## Demo
 
@@ -111,13 +133,14 @@ Three log files per agent in `.atn/logs/{agent_id}/`:
 
 ## Architecture
 
-Cargo workspace with 7 crates (library-first design):
+Cargo workspace with 8 crates (library-first design):
 - **atn-core**: pure domain types, no async, no I/O
 - **atn-pty**: PTY session lifecycle via portable-pty + tokio
 - **atn-server**: Axum binary with REST + SSE + embedded static UI
 - **atn-wiki**: wiki storage and coordination logic
 - **atn-trail**: agentrail file reader and CLI wrapper
 - **atn-replay**: PTY transcript rendering (vt100 + clap)
+- **atn-cli**: typed HTTP client for the REST API (clap + ureq)
 - **atn-ui**: Yew components (placeholder)
 
 ## Known Issues

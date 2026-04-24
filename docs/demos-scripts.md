@@ -31,6 +31,7 @@ time window.
 | 7 | REST API tour                           | 4 min    | No                    |
 | 8 | Scale-UI fleet, 21 fake agents (legacy) | 5–15 min | No                    |
 | 9 | Windowed UI — layouts + pin + keyboard  | 5 min    | No                    |
+|10 | atn-cli tour — agents / events / wiki   | 5 min    | No                    |
 
 What is **not** demoable yet: the Ollama / CUDA transports (future
 sagas). Everything else in the scale-UI saga (search, chips, grouping,
@@ -565,6 +566,89 @@ Or Ctrl-C the terminal running `setup.sh` if it launched the server.
 
 ---
 
+## Demo 10 — atn-cli tour
+
+**What it shows** (atn-cli saga, steps 1–5)
+- Typed HTTP client for every ATN endpoint: `agents list/state/input/
+  stop/restart/reconnect/delete/wait/screenshot`, `events list/send`,
+  `wiki list/get/put/delete` with ETag round-trips.
+- `ATN_URL` / `--base-url` for pointing at a non-default server,
+  meaningful exit codes (0 ok, 1 usage, 2 not-found, 3 http/timeout,
+  4 server error), table + JSON output formats.
+- Replaces the curl+jq sprawl that's been growing across the demo
+  scripts. Script recipes (wait-for-all-idle, tail events, ETag-
+  retry loops) in [`docs/atn-cli.md`](./atn-cli.md).
+
+**Why it matters**
+- Single tool any integration (CI, ops, other tooling) can lean on
+  instead of hand-rolling shell.
+- `wait` with exponential backoff + canonical state aliases is the
+  right primitive for "has the agent spun up?" checks.
+
+**Setup**
+```bash
+cargo build -p atn-server -p atn-cli
+cargo run -p atn-server       # separate terminal; leave running
+export ATN_URL=http://localhost:7500
+```
+
+**Steps**
+1. Empty fleet.
+   ```bash
+   atn-cli agents list
+   # (no agents)
+   ```
+2. Seed a worker via REST (CLI doesn't create agents — deliberately
+   narrow scope), then wait for spawn.
+   ```bash
+   curl -sS -X POST -H 'Content-Type: application/json' \
+     -d '{"name":"cli","role":"worker","transport":"local","working_dir":".","project":"cli","agent":"bash"}' \
+     $ATN_URL/api/agents
+   atn-cli agents wait cli --state any-non-starting --timeout 10
+   atn-cli agents list
+   ```
+3. Drive input + inspect via screenshot.
+   ```bash
+   atn-cli agents input cli 'echo HELLO_FROM_CLI'
+   atn-cli agents wait cli --state idle --timeout 5
+   atn-cli agents screenshot cli --rows 20 --cols 80 | tail -5
+   ```
+4. Send an event + tail the log.
+   ```bash
+   atn-cli events send \
+     --from cli --to cli --kind completion_notice \
+     --summary "atn-cli demo"
+   sleep 3
+   atn-cli events list
+   ```
+5. Read + write a wiki page with optimistic concurrency.
+   ```bash
+   ETAG=$(atn-cli --verbose wiki get Coordination/Goals 2>&1 >/dev/null \
+          | awk '/^ETag:/{print $2}')
+   printf '# Goals\n\n- atn-cli demo at %s\n' "$(date -Iseconds)" \
+     | atn-cli wiki put Coordination/Goals --stdin --if-match "$ETAG"
+   atn-cli wiki get Coordination/Goals
+   ```
+6. Confirm the unhappy paths exit cleanly.
+   ```bash
+   atn-cli agents state ghost   ; echo "exit=$?"   # 2
+   atn-cli events send --from cli --kind nope --summary x ; echo "exit=$?"  # 1
+   atn-cli wiki put Coordination/Goals --stdin --if-match '"stale"' \
+     <<< 'x' ; echo "exit=$?"   # 2
+   ```
+
+**Cleanup**
+```bash
+atn-cli agents delete cli
+```
+
+**Variations**
+- Point at a remote server: `atn-cli --base-url http://other:7500 agents list`.
+- `--format json` everywhere for piping into `jq` when a script
+  needs a specific field.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
@@ -573,8 +657,10 @@ Or Ctrl-C the terminal running `setup.sh` if it launched the server.
   Demo 3 + the middle of Demo 6 still work (legacy).
 - **10–15 min, real rack host**: Demos 1 → 2 (preview) → 4 (reconnect)
   → 5 (cleanup). That's the full uber-use-case story.
-- **Integrations / API-minded audience**: Demo 7 + a click-through of
-  Demo 9.
+- **Integrations / API-minded audience**: Demo 10 (atn-cli tour) —
+  one tool covers every REST endpoint with meaningful exit codes
+  and `wait` for state polling. Demo 7 is still worth a quick
+  detour if the audience wants to see the raw curl shapes.
 
 ## When new demos arrive
 
@@ -587,6 +673,7 @@ See also:
   demo in more depth
 - [docs/windowed-ui.md](./windowed-ui.md) — the windowed-UI walkthrough
   (primary model)
+- [docs/atn-cli.md](./atn-cli.md) — typed CLI reference + recipes
 - [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
   (legacy)
 - [docs/remote-pty.md](./remote-pty.md) — manual remote PTY
