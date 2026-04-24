@@ -1,0 +1,1 @@
+New tools module with file_read (256KiB cap) + file_write (1MiB cap) + sandbox_path + dispatch + tool_schemas. run_tool_loop replaces step-2 single-shot: sends ChatRequest with tools, dispatches each tool_call, appends assistant+tool turns, iterates to --max-tool-iterations. 12 new unit tests (28 total).
