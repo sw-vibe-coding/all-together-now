@@ -69,6 +69,54 @@ enum Command {
         #[command(subcommand)]
         action: AgentsCommand,
     },
+    /// Inter-agent event log — list + send.
+    Events {
+        #[command(subcommand)]
+        action: EventsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// List event-log entries (optionally since index N).
+    List {
+        /// Start index (exclusive of everything before).
+        #[arg(long)]
+        since: Option<usize>,
+        #[command(flatten)]
+        fmt: FormatArg,
+    },
+    /// Submit a PushEvent to the message router.
+    ///
+    /// Valid kinds: feature_request, bug_fix_request,
+    /// completion_notice, blocked_notice, needs_info,
+    /// verification_request.
+    Send {
+        /// Source agent id.
+        #[arg(long)]
+        from: String,
+        /// Target agent id (omit to broadcast / escalate).
+        #[arg(long)]
+        to: Option<String>,
+        /// Event kind (see subcommand help for valid values).
+        #[arg(long)]
+        kind: String,
+        /// Human-readable summary that becomes the agent's prompt.
+        #[arg(long)]
+        summary: String,
+        /// Priority — one of `normal`, `high`, `blocking`.
+        #[arg(long, default_value = "normal")]
+        priority: String,
+        /// Optional issue tracker id.
+        #[arg(long)]
+        issue_id: Option<String>,
+        /// Optional wiki path (e.g. `Coordination/Requests`).
+        #[arg(long)]
+        wiki_link: Option<String>,
+        /// Optional repo label for the source.
+        #[arg(long, default_value = ".")]
+        source_repo: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -218,6 +266,7 @@ fn main() -> ExitCode {
     }
     let code = match cli.command {
         Command::Agents { action } => run_agents(&base, cli.verbose, action),
+        Command::Events { action } => run_events(&base, cli.verbose, action),
     };
     ExitCode::from(code)
 }
@@ -619,6 +668,271 @@ fn report_status_error(url: &str, status: u16, body: &str) -> u8 {
     }
 }
 
+// ── Events subcommands ───────────────────────────────────────────────
+
+const VALID_PUSH_KINDS: &[&str] = &[
+    "feature_request",
+    "bug_fix_request",
+    "completion_notice",
+    "blocked_notice",
+    "needs_info",
+    "verification_request",
+];
+
+const VALID_PRIORITIES: &[&str] = &["normal", "high", "blocking"];
+
+fn validate_kind(k: &str) -> Result<&'static str, String> {
+    // Accept hyphenated aliases too.
+    let norm = k.replace('-', "_");
+    for canonical in VALID_PUSH_KINDS {
+        if canonical == &norm {
+            return Ok(canonical);
+        }
+    }
+    Err(format!(
+        "invalid kind '{k}'; valid values: {}",
+        VALID_PUSH_KINDS.join(", ")
+    ))
+}
+
+fn validate_priority(p: &str) -> Result<&'static str, String> {
+    for canonical in VALID_PRIORITIES {
+        if canonical == &p {
+            return Ok(canonical);
+        }
+    }
+    Err(format!(
+        "invalid priority '{p}'; valid values: {}",
+        VALID_PRIORITIES.join(", ")
+    ))
+}
+
+#[derive(Deserialize)]
+struct EventLogEntryLite {
+    event: PushEventLite,
+    #[serde(default)]
+    decision: String,
+    #[serde(default)]
+    delivered: bool,
+    #[serde(default)]
+    logged_at: String,
+}
+
+#[derive(Deserialize)]
+struct PushEventLite {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    source_agent: String,
+    #[serde(default)]
+    target_agent: Option<String>,
+    #[serde(default)]
+    summary: String,
+}
+
+fn run_events(base: &str, verbose: bool, cmd: EventsCommand) -> u8 {
+    match cmd {
+        EventsCommand::List { since, fmt } => events_list(base, verbose, since, fmt.format),
+        EventsCommand::Send {
+            from,
+            to,
+            kind,
+            summary,
+            priority,
+            issue_id,
+            wiki_link,
+            source_repo,
+        } => events_send(
+            base, verbose, &from, to, &kind, &summary, &priority, issue_id, wiki_link, &source_repo,
+        ),
+    }
+}
+
+fn events_list(base: &str, verbose: bool, since: Option<usize>, format: OutputFormat) -> u8 {
+    let url = match since {
+        Some(n) => format!("{base}/api/events?since={n}"),
+        None => format!("{base}/api/events"),
+    };
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status = resp.status();
+    let body = resp.into_string().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        return report_status_error(&url, status, &body);
+    }
+    match format {
+        OutputFormat::Json => {
+            match serde_json::from_str::<Value>(&body) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or(body)),
+                Err(_) => println!("{body}"),
+            }
+            EXIT_OK
+        }
+        OutputFormat::Table => {
+            let entries: Vec<EventLogEntryLite> = match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = writeln!(std::io::stderr(), "failed to parse events: {e}");
+                    return EXIT_HTTP;
+                }
+            };
+            print_events_table(&entries);
+            EXIT_OK
+        }
+    }
+}
+
+fn format_events_table(entries: &[EventLogEntryLite]) -> String {
+    let headers = ["LOGGED_AT", "KIND", "FROM → TO", "DECISION", "DELIVERED", "SUMMARY"];
+    let rows: Vec<[String; 6]> = entries
+        .iter()
+        .map(|e| {
+            let route = match &e.event.target_agent {
+                Some(to) => format!("{} → {}", e.event.source_agent, to),
+                None => format!("{} → broadcast", e.event.source_agent),
+            };
+            let delivered = if e.delivered { "yes" } else { "no" };
+            let summary = if e.event.summary.len() > 80 {
+                format!("{}…", &e.event.summary[..79])
+            } else {
+                e.event.summary.clone()
+            };
+            [
+                e.logged_at.clone(),
+                e.event.kind.clone(),
+                route,
+                e.decision.clone(),
+                delivered.to_string(),
+                summary,
+            ]
+        })
+        .collect();
+    let mut widths = [0usize; 6];
+    for (i, h) in headers.iter().enumerate() {
+        widths[i] = h.len();
+    }
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.chars().count());
+        }
+    }
+    let mut out = String::new();
+    for (i, h) in headers.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&format!("{:<width$}", h, width = widths[i]));
+    }
+    out.push('\n');
+    for (i, w) in widths.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&"-".repeat(*w));
+    }
+    out.push('\n');
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i > 0 {
+                out.push_str("  ");
+            }
+            out.push_str(&format!("{:<width$}", cell, width = widths[i]));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn print_events_table(entries: &[EventLogEntryLite]) {
+    if entries.is_empty() {
+        println!("(no events)");
+        return;
+    }
+    print!("{}", format_events_table(entries));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn events_send(
+    base: &str,
+    verbose: bool,
+    from: &str,
+    to: Option<String>,
+    kind: &str,
+    summary: &str,
+    priority: &str,
+    issue_id: Option<String>,
+    wiki_link: Option<String>,
+    source_repo: &str,
+) -> u8 {
+    let canonical_kind = match validate_kind(kind) {
+        Ok(k) => k,
+        Err(msg) => {
+            let _ = writeln!(std::io::stderr(), "{msg}");
+            return EXIT_USAGE;
+        }
+    };
+    let canonical_priority = match validate_priority(priority) {
+        Ok(p) => p,
+        Err(msg) => {
+            let _ = writeln!(std::io::stderr(), "{msg}");
+            return EXIT_USAGE;
+        }
+    };
+    let event = build_push_event(
+        from,
+        to,
+        canonical_kind,
+        summary,
+        canonical_priority,
+        issue_id,
+        wiki_link,
+        source_repo,
+    );
+    let url = format!("{base}/api/events");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "POST {url}");
+    }
+    match ureq::post(&url).send_json(event) {
+        Ok(_) => EXIT_OK,
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_push_event(
+    from: &str,
+    to: Option<String>,
+    kind: &str,
+    summary: &str,
+    priority: &str,
+    issue_id: Option<String>,
+    wiki_link: Option<String>,
+    source_repo: &str,
+) -> Value {
+    let id = format!(
+        "cli-{from}-{millis}",
+        millis = chrono::Utc::now().timestamp_millis()
+    );
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    serde_json::json!({
+        "id": id,
+        "kind": kind,
+        "source_agent": from,
+        "source_repo": source_repo,
+        "target_agent": to,
+        "issue_id": issue_id,
+        "summary": summary,
+        "wiki_link": wiki_link,
+        "priority": priority,
+        "timestamp": timestamp,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,6 +1072,95 @@ mod tests {
         assert!(any.matches("idle"));
         assert!(any.matches("awaiting_human_input"));
         assert!(any.matches("disconnected"));
+    }
+
+    #[test]
+    fn validate_kind_accepts_canonical_and_hyphen_aliases() {
+        assert_eq!(validate_kind("completion_notice").unwrap(), "completion_notice");
+        assert_eq!(validate_kind("completion-notice").unwrap(), "completion_notice");
+        assert_eq!(validate_kind("bug-fix-request").unwrap(), "bug_fix_request");
+        assert_eq!(validate_kind("verification_request").unwrap(), "verification_request");
+    }
+
+    #[test]
+    fn validate_kind_rejects_unknown() {
+        let err = validate_kind("nope").unwrap_err();
+        // Error spells out the full list of valid kinds for `--help`-style UX.
+        assert!(err.contains("feature_request"));
+        assert!(err.contains("verification_request"));
+    }
+
+    #[test]
+    fn validate_priority_lists_valid_values() {
+        assert_eq!(validate_priority("normal").unwrap(), "normal");
+        assert_eq!(validate_priority("high").unwrap(), "high");
+        assert_eq!(validate_priority("blocking").unwrap(), "blocking");
+        let err = validate_priority("urgent").unwrap_err();
+        assert!(err.contains("normal"));
+        assert!(err.contains("blocking"));
+    }
+
+    #[test]
+    fn build_push_event_has_required_fields() {
+        let ev = build_push_event(
+            "worker-hlasm",
+            Some("coordinator".to_string()),
+            "completion_notice",
+            "task X done",
+            "high",
+            Some("ATN-42".to_string()),
+            None,
+            ".",
+        );
+        assert_eq!(ev["source_agent"], "worker-hlasm");
+        assert_eq!(ev["target_agent"], "coordinator");
+        assert_eq!(ev["kind"], "completion_notice");
+        assert_eq!(ev["summary"], "task X done");
+        assert_eq!(ev["priority"], "high");
+        assert_eq!(ev["issue_id"], "ATN-42");
+        assert_eq!(ev["source_repo"], ".");
+        // Auto-generated id: `cli-<from>-<millis>`.
+        assert!(ev["id"].as_str().unwrap().starts_with("cli-worker-hlasm-"));
+        // RFC3339 timestamps start with year + `T` separator.
+        let ts = ev["timestamp"].as_str().unwrap();
+        assert!(ts.len() >= 20 && ts.contains('T'));
+    }
+
+    #[test]
+    fn events_table_renders_broadcast_row() {
+        let entries = vec![
+            EventLogEntryLite {
+                event: PushEventLite {
+                    kind: "completion_notice".into(),
+                    source_agent: "worker-hlasm".into(),
+                    target_agent: Some("coordinator".into()),
+                    summary: "task X done".into(),
+                },
+                decision: "deliver:coordinator".into(),
+                delivered: true,
+                logged_at: "2026-04-23T17:00:00Z".into(),
+            },
+            EventLogEntryLite {
+                event: PushEventLite {
+                    kind: "blocked_notice".into(),
+                    source_agent: "worker-rpg".into(),
+                    target_agent: None,
+                    summary: "blocked on hlasm".into(),
+                },
+                decision: "broadcast".into(),
+                delivered: false,
+                logged_at: "2026-04-23T17:05:00Z".into(),
+            },
+        ];
+        let out = format_events_table(&entries);
+        let lines: Vec<&str> = out.lines().collect();
+        // header + rule + 2 rows
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].contains("LOGGED_AT"));
+        assert!(lines[2].contains("worker-hlasm → coordinator"));
+        assert!(lines[2].contains("yes"));
+        assert!(lines[3].contains("worker-rpg → broadcast"));
+        assert!(lines[3].contains("no"));
     }
 
     #[test]
