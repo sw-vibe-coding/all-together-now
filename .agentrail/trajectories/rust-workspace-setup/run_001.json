@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-workspace-setup",
+  "state": {
+    "number": 1,
+    "step": "agent-scaffold"
+  },
+  "action": "Added crates/atn-agent to workspace. Cargo.toml deps: atn-core/chrono/clap/serde/serde_json/ureq + tempfile dev. crates/atn-agent/src/main.rs with Cli derive struct (11 flags), run() fn, resolve_inbox_dir (defense-in-depth against empty/..//\\ ids), poll_inbox_once (read_dir + extension filter + lexical sort + InboxMessage parse + malformed skip), handle_inbox_file (print inbox: line + optional dry-run line + rename .json → .json.done). Signal handling: relies on Rust's default SIGINT handler (clean exit) + --exit-on-empty for integration tests; removed over-engineered libc FFI signal plumbing. 7 unit tests covering defaults, path rejection (empty/../a/b/.., backslash/dot), empty inbox, happy rename, malformed JSON skip, ATN_DIR_NAME const drift. Live smoke verified banner + rename + second-pass empty-exit with --exit-on-empty. cargo test/clippy/doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T11:42:48"
+}

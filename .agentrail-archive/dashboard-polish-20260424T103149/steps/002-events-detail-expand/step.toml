@@ -1,0 +1,13 @@
+number = 2
+slug = "events-detail-expand"
+status = "completed"
+description = """
+## Step 2: Inline event-row expansion + escalation jump link
+
+Make each event..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T22:06:46"
+completed_at = "2026-04-24T09:01:25"
+task_type = "yew-component"
+commits = ["a164959752d2234ff12c1f55982f07101994bb93"]

@@ -1,0 +1,1 @@
+Events filter bar: text search (summary+source+target), 6 kind chips (OR), 3-way delivered radio, reset, 'K/N entries' counter. eventsFilter state persists in atn-window-ui-v1. Escalation banners stay unfiltered. Live Playwright-verified all branches + persistence.

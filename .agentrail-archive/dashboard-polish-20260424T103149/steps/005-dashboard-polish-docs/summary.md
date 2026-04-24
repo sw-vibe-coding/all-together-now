@@ -1,0 +1,1 @@
+Closed the dashboard-polish saga. New docs/events-view.md; windowed-ui.md gains a Wiki side panel section; demos-scripts.md has Demo 11 mirroring the step 1-4 Playwright smokes; status.md Current State is 'Dashboard-Polish Saga Complete' with D1..D5 rows.

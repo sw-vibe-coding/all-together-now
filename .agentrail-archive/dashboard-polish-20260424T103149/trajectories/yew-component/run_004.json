@@ -1,0 +1,11 @@
+{
+  "task_type": "yew-component",
+  "state": {
+    "number": 4,
+    "step": "wiki-panel-live"
+  },
+  "action": "Server: wiki_get_page now takes HeaderMap, short-circuits to 304+ETag on matching If-None-Match. Client: wikiPanel.etag + WIKI_PANEL_POLL_MS=5000 + _pollTimer state. Rewrote loadWikiPanelPage with mode='initial'|'poll' — initial clears etag + shows Loading, poll sends If-None-Match, both handle 304/404/non-OK, poll triggers .wsp-flash keyframe animation on real change. @keyframes wsp-flash CSS (350ms green→transparent). startWikiPanelPolling + stopWikiPanelPolling interval helpers; body no-ops on !open || document.hidden || !title. visibilitychange listener kicks an immediate poll on re-focus. New openWikiPanelAt(title) helper syncs dropdown + state + opens panel if closed. toggleWikiPanel starts/stops polling. 404 renders muted '(page deleted)' instead of an error. Event-row click handler for a.event-wiki-link now checks wikiPanel.open: open → preventDefault + openWikiPanelAt (title from data-wiki-title or decoded href); closed → fall through to anchor's target=_blank default. Live Playwright smoke: curl 304 verified; pollFresh after REST PUT shows content change + wsp-flash; 6.5s wait with panel closed → 0 /api/wiki/ fetches; cross-link with panel open swaps Requests→Goals with defaultPrevented + 0 tabsOpened. cargo test/clippy/doc clean.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T09:42:06"
+}

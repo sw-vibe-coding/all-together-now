@@ -1,0 +1,1 @@
+New crates/atn-agent with clap CLI + lifecycle loop. Banner flips PTY to Running; inbox poll scans <atn-dir>/inboxes/<id>/ sorted lexically, parses InboxMessage, prints summary, renames to .json.done. Malformed JSON skipped with stderr log. --dry-run/--exit-on-empty/--verbose all wired. resolve_inbox_dir rejects traversal. 7 unit tests + live smoke.

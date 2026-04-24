@@ -1,0 +1,12 @@
+number = 2
+slug = "agent-ollama-chat"
+status = "pending"
+description = """
+## Step 2: Ollama /api/chat integration
+
+Wire the scaffold up to Ollama's HTT..."""
+role = "production"
+context_files = []
+created_at = "2026-04-24T10:33:01"
+task_type = "rust-project-init"
+commits = []

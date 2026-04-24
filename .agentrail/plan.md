@@ -1,58 +1,86 @@
-ATN — Dashboard Polish
+ATN — atn-agent
 
-Two independent pieces of dashboard UX that both need the same
-JS/CSS/docs loop:
+Rust-native AI-coding-agent wrapper. Stands in as an agent
+`launch_command` the same way `claude` / `codex` / `opencode-z-ai-glm-5`
+do today. Wraps an Ollama-compatible HTTP endpoint with tool-calling
+and integrates with ATN's inbox/outbox file-based messaging —
+replaces the `opencode run` + hand-written JSON scaffolding in
+`docs/needed-tools.md §2`.
 
-1. The Events view has grown to the point where scanning a long log
-   is tedious. It needs filters + inline detail.
-2. The wiki is currently a first-class tab, but agents+coord often
-   want to glance at a page without leaving the dashboard. A
-   collapsible wiki panel next to the dashboard lets the user keep
-   one reference page visible alongside the agents.
+## Why
+
+- Every demo outside `fake-*` shims needs a real CLI installed
+  (`claude` / `codex` / `opencode`). Those are fine for live use
+  but heavy for CI + onboarding.
+- Ollama is a simple HTTP API; wrapping it in Rust gives us a lean
+  agent binary that needs no Python, no node_modules, no global
+  install step — just `cargo build -p atn-agent`.
+- The tool-calling loop is a well-understood primitive. Getting our
+  own version means we control the inbox/outbox plumbing, respect
+  `atn-core::inbox` conventions, and print a clean PTY banner the
+  dashboard can track.
+
+## Non-goals (this saga)
+
+- Provider-agnostic SDK. We target the Ollama /api/chat shape
+  (which opencode mirrors); other providers can land later.
+- Agent memory across restarts beyond re-reading the inbox.
+- Multi-turn planning. Tool-call loop caps at N iterations; anything
+  more elaborate is the next saga's job.
 
 ## Steps
 
-1. events-filter-chips — filter bar above the Events columns:
-   chips for kind (feature_request / bug_fix_request / …),
-   delivered/undelivered, a text search box matching summary +
-   source_agent + target_agent. Persist the filter state in the
-   existing windowed-UI localStorage blob so refresh restores it.
+1. agent-scaffold — new `atn-agent` crate with a clap CLI
+   (`--model`, `--base-url`, `--agent-id`, `--atn-dir`, `--workspace`,
+   `--inbox-poll-secs`, `--max-tool-iterations`, `--allow-shell`).
+   Main loop: print a banner to stdout so ATN's PTY state tracker
+   sees the agent come up, then poll
+   `<atn-dir>/inboxes/<agent-id>/` for `.json` messages, ack each
+   by renaming to `.json.done`. No LLM calls yet — this step is
+   pure lifecycle + inbox plumbing. SIGINT should exit cleanly so
+   ATN's `Restart` / shutdown stays responsive.
 
-2. events-detail-expand — click an event row → inline expand with
-   full JSON, formatted timestamp, linkified wiki_link. `Esc`
-   collapses. Escalation banners gain a "jump to event" link that
-   scrolls + expands the matching entry.
+2. agent-ollama-chat — send a prompt to
+   `POST <base-url>/api/chat` shaped as the Ollama chat payload
+   `{model, messages:[{role,content}], stream:false, tools:[]}`.
+   Build the initial user message from an inbox entry's `summary`
+   + `source_agent` + optional `wiki_link` context. Print the
+   model's `message.content` to stdout so the dashboard shows
+   live activity. Handle transport errors gracefully (log to
+   stderr, skip the message, keep polling).
 
-3. wiki-panel-core — global collapsible right-side wiki panel,
-   toggled from a new button in the top bar. Dropdown picks a page
-   (populated from `GET /api/wiki`); body renders the `html` field
-   from `GET /api/wiki/{title}`. Closes with the same button or
-   `Esc`. Pure read-only at this step.
+3. agent-tools-fs — implement `file_read(path)` and
+   `file_write(path, content)` tools backed by the agent's
+   `--workspace` directory. Path validation rejects absolute paths
+   and `..` traversal outside the workspace. Tool-call loop:
+   dispatch each `message.tool_calls` entry, append a
+   `{role: 'tool', content: …}` message with the result, re-POST,
+   stop when the model returns no tool_calls or we hit
+   `--max-tool-iterations`.
 
-4. wiki-panel-live — 5 s poll + ETag-based change detection (the
-   server already emits an `ETag` header). On a change, re-render
-   + brief flash animation. Clicking a wiki_link in the Events
-   view's detail-expand (from step 2) opens the target page in
-   the side panel instead of a new tab, if the panel is open.
+4. agent-tools-shell-outbox — `shell_exec(command)` behind
+   `--allow-shell` (default off), runs in the workspace, captures
+   combined stdout+stderr, truncates to 4 KiB, times out at 30 s.
+   `outbox_send(target, kind, summary)` writes a `PushEvent` JSON
+   to `<atn-dir>/outboxes/<agent-id>/`. `inbox_ack(message_id)`
+   renames the matching inbox `.json` to `.json.done` (the main
+   loop does this too after a successful run, but exposing the
+   tool lets the model explicitly ack mid-run).
 
-5. dashboard-polish-docs — new doc + demo + status rows.
-   - `docs/events-view.md` — filter chips, detail expand, how the
-     router decisions show up.
-   - windowed-ui.md gains a "Wiki side panel" section.
-   - `docs/demos-scripts.md` Demo 11 "events view + wiki panel".
-   - `docs/status.md`: D1..D5 rows.
+5. agent-integration-demo-docs — integration test against a stub
+   Ollama HTTP server (`TcpListener` + handcrafted JSON responses;
+   no external Ollama install). `docs/atn-agent.md` reference.
+   Demo 12 "atn-agent end-to-end" in `demos-scripts.md`. New
+   `demos/atn-agent/setup.sh` that boots atn-server, starts a
+   stub Ollama on a loopback port, creates an agent whose
+   launch_command runs `atn-agent --base-url <stub>`, sends an
+   inbox message via `atn-cli events send`, and asserts the
+   outbox grows. `docs/status.md`: A1..A5 rows.
 
 ## Success metrics
 
-- Typing `worker-hlasm` in the Events filter narrows to entries
-  involving that agent.
-- A `blocked_notice` event row expands in place to show full JSON.
-- The wiki panel opens via top-bar button, picks a page, and stays
-  in sync when that page is edited elsewhere (wait 5–10 s).
-- cargo test + clippy + doc clean.
-
-## Out of scope
-
-- Wiki edit-in-panel (read-only for this saga; atn-cli already
-  covers writes).
-- Per-agent wiki attachments (the panel is global for now).
+- `atn-agent --help` prints sane usage + exit codes.
+- End-to-end integration test (stub Ollama + stub inbox) passes.
+- `atn-agent --dry-run` exists for smoke-testing the tool loop
+  without any LLM call.
+- cargo test + clippy + doc clean workspace-wide.

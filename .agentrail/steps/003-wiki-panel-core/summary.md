@@ -1,1 +1,0 @@
-New fixed-right wiki side-panel with top-bar toggle. Dropdown populated from /api/wiki, body renders server's html. State persists in atn-window-ui-v1 under wikiPanel sub-key. Esc closes after the event-expansion handler releases it. Verified open/pick-page/close/reopen + persistence via Playwright.
