@@ -1,0 +1,13 @@
+number = 2
+slug = "cli-agents-actions"
+status = "completed"
+description = """
+## Step 2: atn-cli — agents input/stop/restart/wait/screenshot
+
+Round out t..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T17:23:26"
+completed_at = "2026-04-23T17:34:21"
+task_type = "rust-project-init"
+commits = ["f96ebda6d8da171dab47a35817145418513154ff"]

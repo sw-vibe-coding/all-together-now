@@ -1,0 +1,15 @@
+number = 4
+slug = "cli-wiki"
+status = "completed"
+description = """
+## Step 4: atn-cli — wiki list/get/put/delete with ETag
+
+### Deliverables
+
+..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T17:23:48"
+completed_at = "2026-04-23T17:55:55"
+task_type = "rust-project-init"
+commits = ["29f16dc4cfd4db4b3a314f9bc70166dd5d1ed692"]

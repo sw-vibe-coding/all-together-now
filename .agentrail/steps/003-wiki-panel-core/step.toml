@@ -1,0 +1,12 @@
+number = 3
+slug = "wiki-panel-core"
+status = "pending"
+description = """
+## Step 3: Global wiki side-panel (read-only)
+
+Add a collapsible right-side w..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T22:06:58"
+task_type = "yew-component"
+commits = []

@@ -1,1 +1,0 @@
-Closed the atn-cli saga. New end-to-end integration test drives every subcommand via CARGO_BIN_EXE_atn-cli against a real server. New docs/atn-cli.md reference + 3 script recipes. Demo 10 mirrors the integration test in demos-scripts.md; current state updated to 'atn-cli Saga Complete'; C1..C5 rows + atn-cli crate row added to status.md.

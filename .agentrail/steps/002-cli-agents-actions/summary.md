@@ -1,1 +1,0 @@
-Added agents input/stop/restart/reconnect/delete/wait/screenshot. input matches the UI's atomic text+\r shape; wait polls with doubling backoff + canonical state aliases (any-non-starting etc.); screenshot streams the rendered body. 404→exit 2, timeout→exit 3 across subcommands. 3 new unit tests; live-verified end-to-end against a bash agent.

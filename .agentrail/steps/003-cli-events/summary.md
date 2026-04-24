@@ -1,1 +1,0 @@
-Added events list (table w/ FROM→TO + broadcast fallback, since index) and events send (auto cli-<from>-<millis> id, RFC3339 timestamp, flat PushEvent JSON). Client-side kind + priority validation with hyphen aliases and helpful error messages. 5 new unit tests (14 total). Live-verified against a 2-agent topology.

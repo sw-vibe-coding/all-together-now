@@ -1,78 +1,58 @@
-ATN — atn-cli
+ATN — Dashboard Polish
 
-A Rust CLI that wraps the ATN HTTP API so demo scripts and
-integrations don't have to hand-roll curl + jq. Matches the sketch
-in docs/needed-tools.md §1 but adds the step-3 screenshot endpoint.
+Two independent pieces of dashboard UX that both need the same
+JS/CSS/docs loop:
 
-## Why
-
-- Demo scripts lean on `curl` + `jq` for agent spawn/input/state
-  polling. That works but mixes JSON-escaping, status-code checks,
-  and argv quoting in shell. A typed CLI collapses that into
-  readable commands with clean exit codes.
-- Wait-for-state loops (`while state != idle; do sleep; done`) are
-  fragile. A `wait` subcommand with structured AgentState parsing,
-  timeout, and exponential backoff is the right primitive.
-- The screenshot endpoint (ops-polish step 3) needs a consumer —
-  `atn-cli agents screenshot <id>` makes it usable from scripts
-  without manual URL construction.
+1. The Events view has grown to the point where scanning a long log
+   is tedious. It needs filters + inline detail.
+2. The wiki is currently a first-class tab, but agents+coord often
+   want to glance at a page without leaving the dashboard. A
+   collapsible wiki panel next to the dashboard lets the user keep
+   one reference page visible alongside the agents.
 
 ## Steps
 
-1. cli-scaffold — new `atn-cli` crate + clap derive + sync HTTP
-   client (ureq or reqwest blocking) + `--base-url` flag +
-   `ATN_URL` env. First subcommands: `agents list` (table or
-   `--format json`) and `agents state <id>`. JSON pretty-print for
-   diagnostics; table formatter for humans.
+1. events-filter-chips — filter bar above the Events columns:
+   chips for kind (feature_request / bug_fix_request / …),
+   delivered/undelivered, a text search box matching summary +
+   source_agent + target_agent. Persist the filter state in the
+   existing windowed-UI localStorage blob so refresh restores it.
 
-2. cli-agents-actions — input/stop/restart/wait/screenshot:
-   - `atn-cli agents input <id> <text>` — POSTs HumanText.
-   - `atn-cli agents input <id> --stdin` — read text from stdin.
-   - `atn-cli agents stop <id>` / `atn-cli agents restart <id>` —
-     POST the corresponding endpoint.
-   - `atn-cli agents wait <id> [--state idle|running|awaiting-input]
-      [--timeout 30]` — poll with exponential backoff, exit 0 on
-     match, non-zero on timeout.
-   - `atn-cli agents screenshot <id> [--format text|ansi|html]
-      [--rows N] [--cols N]` — fetch screenshot, print to stdout
-     (respecting content-type from the endpoint).
+2. events-detail-expand — click an event row → inline expand with
+   full JSON, formatted timestamp, linkified wiki_link. `Esc`
+   collapses. Escalation banners gain a "jump to event" link that
+   scrolls + expands the matching entry.
 
-3. cli-events — list + send:
-   - `atn-cli events list [--since N] [--format json|table]`.
-   - `atn-cli events send --from <agent> [--to <agent>] --kind <kind>
-      --summary <text> [--priority normal|high|blocking]` — build
-     a PushEvent with auto-generated id + RFC3339 timestamp, POST
-     to /api/events. Validates the kind enum client-side.
+3. wiki-panel-core — global collapsible right-side wiki panel,
+   toggled from a new button in the top bar. Dropdown picks a page
+   (populated from `GET /api/wiki`); body renders the `html` field
+   from `GET /api/wiki/{title}`. Closes with the same button or
+   `Esc`. Pure read-only at this step.
 
-4. cli-wiki — list/get/put/delete + ETag handling:
-   - `atn-cli wiki list` — GET /api/wiki.
-   - `atn-cli wiki get <title>` — GET /api/wiki/<title> (prints
-     body + ETag header to stderr with --verbose).
-   - `atn-cli wiki put <title> [--file path | --stdin]
-      [--if-match <etag>]` — PUT with the content body.
-   - `atn-cli wiki delete <title> [--if-match <etag>]` — DELETE.
-   - On 412 Precondition Failed, print a concise
-     "ETag mismatch — refetch and retry" message and exit 2.
+4. wiki-panel-live — 5 s poll + ETag-based change detection (the
+   server already emits an `ETag` header). On a change, re-render
+   + brief flash animation. Clicking a wiki_link in the Events
+   view's detail-expand (from step 2) opens the target page in
+   the side panel instead of a new tab, if the panel is open.
 
-5. cli-integration-and-docs — integration tests + docs/atn-cli.md +
-   Demo 10 in docs/demos-scripts.md + cross-links.
-   - `crates/atn-cli/tests/integration.rs` boots a fresh atn-server
-     on an ephemeral port, spawns a fake-claude, then exercises
-     agents list / input / wait / screenshot + events send + wiki
-     get/put end-to-end with `Command::new` against the just-built
-     `atn-cli` binary.
-   - `docs/atn-cli.md` documents every subcommand with examples
-     (replicating the shapes used by the demo scripts).
-   - `docs/demos-scripts.md` gains **Demo 10 — atn-cli tour** and
-     the "Picking one for a short slot" section gets a cli-first
-     option.
+5. dashboard-polish-docs — new doc + demo + status rows.
+   - `docs/events-view.md` — filter chips, detail expand, how the
+     router decisions show up.
+   - windowed-ui.md gains a "Wiki side panel" section.
+   - `docs/demos-scripts.md` Demo 11 "events view + wiki panel".
+   - `docs/status.md`: D1..D5 rows.
 
 ## Success metrics
 
-- `atn-cli agents list` matches the web dashboard's view.
-- `atn-cli agents wait <id> --state idle --timeout 10` returns 0
-  within a few seconds after spawn or non-zero on timeout.
-- Integration test boots a real server and passes end-to-end.
-- cargo test + clippy + doc warning-free.
-- No changes to existing demo scripts in this saga — `atn-cli`
-  adoption can happen in a follow-up once the tool has soaked.
+- Typing `worker-hlasm` in the Events filter narrows to entries
+  involving that agent.
+- A `blocked_notice` event row expands in place to show full JSON.
+- The wiki panel opens via top-bar button, picks a page, and stays
+  in sync when that page is edited elsewhere (wait 5–10 s).
+- cargo test + clippy + doc clean.
+
+## Out of scope
+
+- Wiki edit-in-panel (read-only for this saga; atn-cli already
+  covers writes).
+- Per-agent wiki attachments (the panel is global for now).

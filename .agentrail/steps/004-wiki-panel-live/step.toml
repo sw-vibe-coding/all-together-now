@@ -1,0 +1,12 @@
+number = 4
+slug = "wiki-panel-live"
+status = "pending"
+description = """
+## Step 4: Wiki panel live updates + events-view cross-link
+
+Wire the panel t..."""
+role = "production"
+context_files = []
+created_at = "2026-04-23T22:07:11"
+task_type = "yew-component"
+commits = []
