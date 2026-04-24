@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-project-init",
+  "state": {
+    "number": 4,
+    "step": "cli-wiki"
+  },
+  "action": "Added WikiCommand{List,Get,Put,Delete} + Command::Wiki variant. WikiPageLite (just content) for GET parse. run_wiki dispatcher + wiki_list/wiki_get/wiki_put/wiki_delete handlers. Shared read_body(file, stdin) returning Result<String, String> with mutual-exclusion + missing-source errors. report_etag_conflict parses WikiConflictResponse.current_etag and emits a script-friendly message (exit 2). Titles passed through unencoded so the server's {*title} wildcard sees raw slashes. --verbose prints ETag on stderr for get and put. 4 new tests: read_body mutual-exclusion, missing-source, file round-trip, etag_conflict_exits_not_found. Live smoke: list 5 Coordination pages, get, --verbose ETag capture, put+etag round-trip, stale etag 409 with current_etag in msg, create+delete+get-404, --file+--stdin both → exit 1.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-23T17:55:55"
+}
