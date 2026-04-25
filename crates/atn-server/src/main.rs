@@ -1,5 +1,6 @@
 mod heat;
 mod prs;
+mod prs_stream;
 mod router;
 mod watchdog_actor;
 
@@ -173,6 +174,10 @@ async fn main() {
     if let Err(e) = std::fs::create_dir_all(&prs_dir) {
         tracing::warn!("create --prs-dir {}: {e}", prs_dir.display());
     }
+    // Canonicalize so the filesystem watcher sees the same path
+    // notify uses internally (kqueue doesn't always honor relative
+    // paths) and so saga lookups don't depend on process cwd.
+    let prs_dir = prs_dir.canonicalize().unwrap_or(prs_dir);
     let central_repo = parsed.central_repo.unwrap_or_else(|| {
         prs_dir
             .parent()
@@ -185,6 +190,11 @@ async fn main() {
         prs_dir.display(),
         central_repo.display()
     );
+
+    // Filesystem watcher fans out registry deltas to /api/prs/stream
+    // subscribers. Spawned once at boot; lives for the process.
+    let prs_broadcast = prs_stream::PrsBroadcast::new();
+    prs_stream::spawn_watcher(prs_dir.clone(), prs_broadcast.clone());
 
     let project_config = load_project_config(&config_path).unwrap_or_else(|e| {
         tracing::error!("Failed to load {}: {e}", config_path.display());
@@ -270,7 +280,7 @@ async fn main() {
         heat: heat_map,
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
-        prs: prs::PrsState::new(prs_dir, central_repo),
+        prs: prs::PrsState::new(prs_dir, central_repo, prs_broadcast),
     };
 
     // Spawn config hot-reload watcher.
@@ -310,6 +320,7 @@ async fn main() {
         .route("/api/agents/{id}/saga", get(get_agent_saga))
         .route("/api/events", get(list_events).post(submit_event))
         .route("/api/prs", get(prs::list_prs))
+        .route("/api/prs/stream", get(prs_stream::pr_stream))
         .route("/api/prs/{id}", get(prs::get_pr))
         .route("/api/prs/{id}/merge", post(prs::merge_pr))
         .route("/api/prs/{id}/reject", post(prs::reject_pr))

@@ -394,3 +394,95 @@ fn prs_endpoints_round_trip() {
     );
     assert_eq!(code, 404);
 }
+
+/// Open the SSE stream, drop a fresh PR JSON into the prs-dir,
+/// and verify a `Created` event arrives within ~3 s. The stream
+/// should also send a `Snapshot` first so the dashboard can
+/// hydrate its initial state without a parallel REST call.
+#[test]
+fn prs_stream_pushes_a_create() {
+    let fix = build_fixture();
+    let srv = ServerGuard::boot(&fix);
+    let url = srv.url("/api/prs/stream");
+
+    // Wait until the server accepts.
+    let healthy = poll_until(Duration::from_secs(5), || {
+        let (c, _) = curl("GET", &srv.url("/api/prs"), None);
+        c == 200
+    });
+    assert!(healthy, "server never returned 200 on /api/prs");
+
+    // Spawn curl in --no-buffer mode; drop a NEW PR after a short
+    // pause so the SSE listener catches it as a delta (not the
+    // snapshot).
+    let _ = std::fs::remove_file(fix.prs_dir.join(format!("{}.json", fix.feature_id)));
+    let _ = std::fs::remove_file(
+        fix.prs_dir.join(format!("{}.json", fix.feature_z_id)),
+    );
+
+    let new_id = "alice-stream-aaa1111";
+    let prs_dir_for_writer = fix.prs_dir.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(700));
+        let body = serde_json::json!({
+            "id": new_id,
+            "agent_id": "alice",
+            "source_repo": "/tmp",
+            "branch": "stream",
+            "target": "main",
+            "commit": "deadbeefdeadbeef",
+            "summary": "stream test",
+            "status": "open",
+            "created_at": "2026-04-25T03:00:00Z",
+        });
+        std::fs::write(
+            prs_dir_for_writer.join(format!("{new_id}.json")),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+    });
+
+    let mut child = Command::new("curl")
+        .args([
+            "-sN", // -s silent, -N no buffering
+            "--max-time",
+            "6",
+            &url,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn curl");
+    let stdout = child.stdout.take().expect("curl stdout");
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut got_snapshot = false;
+    let mut got_created = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut line = String::new();
+    use std::io::BufRead;
+    while std::time::Instant::now() < deadline {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                if line.starts_with("data:") {
+                    let payload = line.trim_start_matches("data:").trim();
+                    if payload.contains("\"snapshot\"") {
+                        got_snapshot = true;
+                    }
+                    if payload.contains("\"created\"") && payload.contains(new_id) {
+                        got_created = true;
+                        break;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = writer.join();
+
+    assert!(got_snapshot, "never saw initial snapshot event");
+    assert!(got_created, "never saw created event for new id");
+}

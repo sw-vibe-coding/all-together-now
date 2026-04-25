@@ -1527,8 +1527,20 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Serializes the three env-mutating base_url tests below.
+    /// Cargo runs unit tests in parallel by default; without this
+    /// guard concurrent ATN_URL writes flake at random.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
     #[test]
     fn base_url_precedence_flag_wins() {
+        let _guard = env_lock();
         // Clear any external env bleed for this single assertion.
         let saved = std::env::var("ATN_URL").ok();
         // SAFETY: tests run serially by default for env mutation here.
@@ -1549,6 +1561,7 @@ mod tests {
 
     #[test]
     fn base_url_env_wins_over_default() {
+        let _guard = env_lock();
         let saved = std::env::var("ATN_URL").ok();
         unsafe {
             std::env::set_var("ATN_URL", "http://envwin:9999");
@@ -1564,6 +1577,7 @@ mod tests {
 
     #[test]
     fn base_url_default_when_nothing_set() {
+        let _guard = env_lock();
         let saved = std::env::var("ATN_URL").ok();
         unsafe {
             std::env::remove_var("ATN_URL");

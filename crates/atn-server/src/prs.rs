@@ -36,14 +36,24 @@ pub struct PrsState {
     pub central_repo: PathBuf,
     /// Serializes mutating ops on the prs directory.
     pub lock: Arc<Mutex<()>>,
+    /// Fan-out for `/api/prs/stream` subscribers. Mutating
+    /// routes push `Updated` events here directly so clients
+    /// see the new state even if the filesystem watcher
+    /// coalesces the rename event.
+    pub broadcast: crate::prs_stream::PrsBroadcast,
 }
 
 impl PrsState {
-    pub fn new(prs_dir: PathBuf, central_repo: PathBuf) -> Self {
+    pub fn new(
+        prs_dir: PathBuf,
+        central_repo: PathBuf,
+        broadcast: crate::prs_stream::PrsBroadcast,
+    ) -> Self {
         Self {
             prs_dir,
             central_repo,
             lock: Arc::new(Mutex::new(())),
+            broadcast,
         }
     }
 }
@@ -260,7 +270,13 @@ pub async fn merge_pr(
     .await;
 
     match outcome {
-        Ok(Ok(rec)) => Json(rec).into_response(),
+        Ok(Ok(rec)) => {
+            state
+                .prs
+                .broadcast
+                .send(crate::prs_stream::PrsEvent::Updated { record: rec.clone() });
+            Json(rec).into_response()
+        }
         Ok(Err((code, body))) => (code, Json(body)).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -302,7 +318,13 @@ pub async fn reject_pr(
     .await;
 
     match outcome {
-        Ok(Ok(rec)) => Json(rec).into_response(),
+        Ok(Ok(rec)) => {
+            state
+                .prs
+                .broadcast
+                .send(crate::prs_stream::PrsEvent::Updated { record: rec.clone() });
+            Json(rec).into_response()
+        }
         Ok(Err((code, body))) => (code, Json(body)).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
