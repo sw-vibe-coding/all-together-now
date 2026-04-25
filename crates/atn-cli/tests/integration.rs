@@ -395,3 +395,235 @@ fn atn_cli_end_to_end_tour() {
     let (code, _, _) = run_cli(&url, &["wiki", "get", "Scratch/AtnCliTest"], None);
     assert_eq!(code, 2, "get after delete should exit 2");
 }
+
+// ── prs round-trip ───────────────────────────────────────────────────
+
+fn run_git(repo: &std::path::Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git spawn");
+    assert!(
+        out.status.success(),
+        "git -C {} {:?} failed: {}",
+        repo.display(),
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn run_git_capture(repo: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git spawn");
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+struct PrsServerGuard {
+    child: Option<Child>,
+    port: u16,
+    _tmp: tempfile::TempDir,
+    central: PathBuf,
+    feature_id: String,
+}
+
+impl PrsServerGuard {
+    fn boot() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().to_path_buf();
+        std::fs::write(
+            base_dir.join("agents.toml"),
+            "[project]\nname = \"prs-cli-test\"\n",
+        )
+        .unwrap();
+
+        let central = base_dir.join("central");
+        let work = base_dir.join("work");
+        let prs_dir = base_dir.join(".atn").join("prs");
+        std::fs::create_dir_all(&prs_dir).unwrap();
+
+        // Set up central + clone + PR push.
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .arg(&central)
+            .output()
+            .unwrap();
+        run_git(&central, &["config", "user.email", "c@t"]);
+        run_git(&central, &["config", "user.name", "C"]);
+        run_git(&central, &["config", "commit.gpgsign", "false"]);
+        run_git(&central, &["config", "receive.denyCurrentBranch", "ignore"]);
+        std::fs::write(central.join("README.md"), "central\n").unwrap();
+        run_git(&central, &["add", "README.md"]);
+        run_git(&central, &["commit", "-m", "init"]);
+
+        Command::new("git")
+            .args(["clone"])
+            .arg(&central)
+            .arg(&work)
+            .output()
+            .unwrap();
+        run_git(&work, &["config", "user.email", "w@t"]);
+        run_git(&work, &["config", "user.name", "W"]);
+        run_git(&work, &["config", "commit.gpgsign", "false"]);
+        run_git(&work, &["checkout", "-b", "feature"]);
+        std::fs::write(work.join("feature.txt"), "feature\n").unwrap();
+        run_git(&work, &["add", "feature.txt"]);
+        run_git(&work, &["commit", "-m", "add feature"]);
+        run_git(
+            &work,
+            &["push", "origin", "feature:refs/heads/pr/alice-feature"],
+        );
+        let sha = run_git_capture(&work, &["rev-parse", "feature"]);
+        let short: String = sha.chars().take(7).collect();
+        let feature_id = format!("alice-feature-{short}");
+
+        // Drop a PR record JSON.
+        let pr_json = serde_json::json!({
+            "id": feature_id,
+            "agent_id": "alice",
+            "source_repo": work.to_string_lossy(),
+            "branch": "feature",
+            "target": "main",
+            "commit": sha,
+            "summary": "feature ready for review",
+            "status": "open",
+            "created_at": "2026-04-25T00:00:00Z",
+        });
+        std::fs::write(
+            prs_dir.join(format!("{feature_id}.json")),
+            serde_json::to_string_pretty(&pr_json).unwrap(),
+        )
+        .unwrap();
+
+        // Boot atn-server.
+        let mut child = Command::new(server_binary())
+            .arg("agents.toml")
+            .arg("--prs-dir")
+            .arg(&prs_dir)
+            .arg("--central-repo")
+            .arg(&central)
+            .current_dir(&base_dir)
+            .env("ATN_PORT", "0")
+            .env("RUST_LOG", "atn_server=warn")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn atn-server");
+
+        let stdout = child.stdout.take().expect("server stdout");
+        let reader = BufReader::new(stdout);
+        let mut port: Option<u16> = None;
+        for line in reader.lines().take(200).map_while(Result::ok) {
+            if let Some(rest) = line.strip_prefix("atn-server ready on ")
+                && let Some((_, p)) = rest.rsplit_once(':')
+                && let Ok(parsed) = p.parse::<u16>()
+            {
+                port = Some(parsed);
+                break;
+            }
+        }
+        let port = port.expect("never saw atn-server ready");
+
+        Self {
+            child: Some(child),
+            port,
+            _tmp: tmp,
+            central,
+            feature_id,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+impl Drop for PrsServerGuard {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+#[test]
+fn atn_cli_prs_round_trip() {
+    let srv = PrsServerGuard::boot();
+    let url = srv.base_url();
+
+    // Wait for the server to actually accept.
+    let healthy = poll_until(Duration::from_secs(5), || {
+        let (code, _, _) = run_cli(&url, &["prs", "list"], None);
+        code == 0
+    });
+    assert!(healthy, "server never returned 0 on prs list");
+
+    // 1. prs list (table) — id appears.
+    let (code, stdout, _) = run_cli(&url, &["prs", "list"], None);
+    assert_eq!(code, 0, "prs list exit");
+    assert!(
+        stdout.contains(&srv.feature_id),
+        "table missing id: {stdout}"
+    );
+    assert!(
+        stdout.contains("feature → main"),
+        "table missing branch→target: {stdout}"
+    );
+    assert!(stdout.contains("open"), "table missing status: {stdout}");
+
+    // 2. prs list --status merged — empty before merge.
+    let (code, stdout, _) =
+        run_cli(&url, &["prs", "list", "--status", "merged"], None);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("(no prs)"), "expected empty table: {stdout}");
+
+    // 3. prs show <id> — pretty fields.
+    let (code, stdout, _) = run_cli(&url, &["prs", "show", &srv.feature_id], None);
+    assert_eq!(code, 0, "prs show exit");
+    assert!(stdout.contains("agent:        alice"), "show: {stdout}");
+    assert!(stdout.contains("branch:       feature"));
+    assert!(stdout.contains("status:       open"));
+
+    // 4. prs show missing → exit 2 + stderr.
+    let (code, _, stderr) = run_cli(&url, &["prs", "show", "no-such-pr"], None);
+    assert_eq!(code, 2, "missing pr should exit 2");
+    assert!(stderr.contains("not found"), "stderr: {stderr}");
+
+    // 5. prs merge <id> → exit 0; central main has the merge commit.
+    let (code, stdout, _) = run_cli(&url, &["prs", "merge", &srv.feature_id], None);
+    assert_eq!(code, 0, "prs merge exit");
+    assert!(stdout.contains("\"status\": \"merged\""), "merge body: {stdout}");
+    assert!(
+        stdout.contains("\"merge_commit\""),
+        "merge body missing merge_commit: {stdout}"
+    );
+    let log = run_git_capture(&srv.central, &["log", "--oneline", "main"]);
+    assert!(
+        log.contains("Merge refs/heads/pr/alice-feature"),
+        "central main missing merge commit; log:\n{log}"
+    );
+
+    // 6. prs list --status merged --format json — id surfaces.
+    let (code, stdout, _) = run_cli(
+        &url,
+        &["prs", "list", "--status", "merged", "--format", "json"],
+        None,
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains(&srv.feature_id), "merged-list: {stdout}");
+
+    // 7. Second merge → 409 → exit 2 + stderr explains.
+    let (code, _, stderr) = run_cli(&url, &["prs", "merge", &srv.feature_id], None);
+    assert_eq!(code, 2, "second merge should exit 2");
+    assert!(
+        stderr.contains("not open") || stderr.contains("status"),
+        "second-merge stderr: {stderr}"
+    );
+}

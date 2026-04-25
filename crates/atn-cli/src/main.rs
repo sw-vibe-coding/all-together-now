@@ -79,6 +79,57 @@ enum Command {
         #[command(subcommand)]
         action: WikiCommand,
     },
+    /// PR registry surfaced by atn-syncd — list, show, merge, reject.
+    Prs {
+        #[command(subcommand)]
+        action: PrsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrsCommand {
+    /// List PR records (GET /api/prs).
+    List {
+        /// Filter by status.
+        #[arg(long, value_enum)]
+        status: Option<PrStatusArg>,
+        #[command(flatten)]
+        fmt: FormatArg,
+    },
+    /// Show a single PR record (GET /api/prs/{id}).
+    Show {
+        /// PR id (e.g. `alice-feature-7d80570`).
+        id: String,
+        #[command(flatten)]
+        fmt: FormatArg,
+    },
+    /// Merge a PR into the central repo (POST /api/prs/{id}/merge).
+    Merge {
+        /// PR id.
+        id: String,
+    },
+    /// Reject a PR (POST /api/prs/{id}/reject) — no git side-effects.
+    Reject {
+        /// PR id.
+        id: String,
+    },
+}
+
+#[derive(Copy, Clone, ValueEnum, Debug)]
+enum PrStatusArg {
+    Open,
+    Merged,
+    Rejected,
+}
+
+impl PrStatusArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            PrStatusArg::Open => "open",
+            PrStatusArg::Merged => "merged",
+            PrStatusArg::Rejected => "rejected",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -310,6 +361,7 @@ fn main() -> ExitCode {
         Command::Agents { action } => run_agents(&base, cli.verbose, action),
         Command::Events { action } => run_events(&base, cli.verbose, action),
         Command::Wiki { action } => run_wiki(&base, cli.verbose, action),
+        Command::Prs { action } => run_prs(&base, cli.verbose, action),
     };
     ExitCode::from(code)
 }
@@ -1206,6 +1258,270 @@ fn report_etag_conflict(title: &str, body: &str) -> u8 {
     EXIT_NOT_FOUND
 }
 
+// ── PR subcommands ───────────────────────────────────────────────────
+
+fn run_prs(base: &str, verbose: bool, cmd: PrsCommand) -> u8 {
+    match cmd {
+        PrsCommand::List { status, fmt } => prs_list(base, verbose, status, fmt.format),
+        PrsCommand::Show { id, fmt } => prs_show(base, verbose, &id, fmt.format),
+        PrsCommand::Merge { id } => prs_action(base, verbose, &id, "merge"),
+        PrsCommand::Reject { id } => prs_action(base, verbose, &id, "reject"),
+    }
+}
+
+fn prs_list(
+    base: &str,
+    verbose: bool,
+    status: Option<PrStatusArg>,
+    format: OutputFormat,
+) -> u8 {
+    let url = match status {
+        Some(s) => format!("{base}/api/prs?status={}", s.as_str()),
+        None => format!("{base}/api/prs"),
+    };
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status_code = resp.status();
+    let body = match resp.into_string() {
+        Ok(s) => s,
+        Err(e) => return report_transport_error(&url, e),
+    };
+    if !(200..300).contains(&status_code) {
+        return report_status_error(&url, status_code, &body);
+    }
+    match format {
+        OutputFormat::Json => {
+            match serde_json::from_str::<Value>(&body) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or(body)),
+                Err(_) => println!("{body}"),
+            }
+            EXIT_OK
+        }
+        OutputFormat::Table => {
+            let prs: Vec<atn_core::pr::PrRecord> = match serde_json::from_str(&body) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = writeln!(std::io::stderr(), "failed to parse prs: {e}");
+                    return EXIT_HTTP;
+                }
+            };
+            print_prs_table(&prs);
+            EXIT_OK
+        }
+    }
+}
+
+fn prs_show(base: &str, verbose: bool, id: &str, format: OutputFormat) -> u8 {
+    let url = format!("{base}/api/prs/{id}");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "GET {url}");
+    }
+    let resp = match ureq::get(&url).call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "pr '{id}' not found");
+            return EXIT_NOT_FOUND;
+        }
+        Err(e) => return report_http_error(&url, e),
+    };
+    let status_code = resp.status();
+    let body = resp.into_string().unwrap_or_default();
+    if !(200..300).contains(&status_code) {
+        return report_status_error(&url, status_code, &body);
+    }
+    match format {
+        OutputFormat::Json => match serde_json::from_str::<Value>(&body) {
+            Ok(v) => {
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or(body));
+                EXIT_OK
+            }
+            Err(_) => {
+                println!("{body}");
+                EXIT_OK
+            }
+        },
+        OutputFormat::Table => {
+            let pr: atn_core::pr::PrRecord = match serde_json::from_str(&body) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = writeln!(std::io::stderr(), "failed to parse pr: {e}");
+                    return EXIT_HTTP;
+                }
+            };
+            print!("{}", format_pr_show(&pr));
+            EXIT_OK
+        }
+    }
+}
+
+fn prs_action(base: &str, verbose: bool, id: &str, action: &str) -> u8 {
+    let url = format!("{base}/api/prs/{id}/{action}");
+    if verbose {
+        let _ = writeln!(std::io::stderr(), "POST {url}");
+    }
+    let resp = ureq::post(&url).send_string("");
+    match resp {
+        Ok(r) => {
+            let status = r.status();
+            let body = r.into_string().unwrap_or_default();
+            if !(200..300).contains(&status) {
+                return report_status_error(&url, status, &body);
+            }
+            // Echo the updated record so scripts can pipe it.
+            match serde_json::from_str::<Value>(&body) {
+                Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or(body)),
+                Err(_) => println!("{body}"),
+            }
+            EXIT_OK
+        }
+        Err(ureq::Error::Status(404, _)) => {
+            let _ = writeln!(std::io::stderr(), "pr '{id}' not found");
+            EXIT_NOT_FOUND
+        }
+        Err(ureq::Error::Status(409, resp)) => {
+            let body = resp.into_string().unwrap_or_default();
+            report_pr_conflict(action, id, &body)
+        }
+        Err(e) => report_http_error(&url, e),
+    }
+}
+
+/// Pretty-print the server's 409 body — `{error, stderr}` for merge,
+/// `{error, status}` for "not open". Surfaces the most useful field
+/// to stderr and exits 2 (matches the wiki ETag mismatch convention).
+fn report_pr_conflict(action: &str, id: &str, body: &str) -> u8 {
+    let parsed: Option<Value> = serde_json::from_str(body).ok();
+    let error_msg = parsed
+        .as_ref()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()))
+        .unwrap_or("conflict");
+    let stderr_msg = parsed
+        .as_ref()
+        .and_then(|v| v.get("stderr").and_then(|e| e.as_str()));
+    let status_msg = parsed
+        .as_ref()
+        .and_then(|v| v.get("status").and_then(|e| e.as_str()));
+    let _ = writeln!(
+        std::io::stderr(),
+        "atn-cli: {action} {id} failed: {error_msg}"
+    );
+    if let Some(s) = stderr_msg
+        && !s.is_empty()
+    {
+        let _ = writeln!(std::io::stderr(), "{}", s.trim_end());
+    } else if let Some(s) = status_msg {
+        let _ = writeln!(std::io::stderr(), "current status: {s}");
+    }
+    EXIT_NOT_FOUND
+}
+
+fn print_prs_table(prs: &[atn_core::pr::PrRecord]) {
+    if prs.is_empty() {
+        println!("(no prs)");
+        return;
+    }
+    print!("{}", format_prs_table(prs));
+}
+
+/// Build the table for `prs list`. Pure (no stdout) — caller prints.
+fn format_prs_table(prs: &[atn_core::pr::PrRecord]) -> String {
+    let headers = ["ID", "AGENT", "BRANCH → TARGET", "STATUS", "SUMMARY"];
+    let rows: Vec<[String; 5]> = prs
+        .iter()
+        .map(|p| {
+            [
+                p.id.clone(),
+                p.agent_id.clone(),
+                format!("{} → {}", p.branch, p.target),
+                pr_status_str(&p.status).to_string(),
+                truncate(&p.summary, 80),
+            ]
+        })
+        .collect();
+    let mut widths = [0usize; 5];
+    for (i, h) in headers.iter().enumerate() {
+        widths[i] = h.len();
+    }
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+    let mut out = String::new();
+    for (i, h) in headers.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&format!("{:<width$}", h, width = widths[i]));
+    }
+    out.push('\n');
+    for (i, w) in widths.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&"-".repeat(*w));
+    }
+    out.push('\n');
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i > 0 {
+                out.push_str("  ");
+            }
+            out.push_str(&format!("{:<width$}", cell, width = widths[i]));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Build the `prs show` table — one `key: value` line per field.
+fn format_pr_show(pr: &atn_core::pr::PrRecord) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("id:           {}\n", pr.id));
+    out.push_str(&format!("agent:        {}\n", pr.agent_id));
+    out.push_str(&format!("branch:       {}\n", pr.branch));
+    out.push_str(&format!("target:       {}\n", pr.target));
+    out.push_str(&format!("source_repo:  {}\n", pr.source_repo));
+    out.push_str(&format!("commit:       {}\n", pr.commit));
+    out.push_str(&format!("status:       {}\n", pr_status_str(&pr.status)));
+    out.push_str(&format!("created_at:   {}\n", pr.created_at));
+    if let Some(c) = &pr.merge_commit {
+        out.push_str(&format!("merge_commit: {c}\n"));
+    }
+    if let Some(t) = &pr.merged_at {
+        out.push_str(&format!("merged_at:    {t}\n"));
+    }
+    if let Some(t) = &pr.rejected_at {
+        out.push_str(&format!("rejected_at:  {t}\n"));
+    }
+    if let Some(e) = &pr.last_error {
+        out.push_str(&format!("last_error:   {e}\n"));
+    }
+    out.push_str(&format!("summary:      {}\n", pr.summary));
+    out
+}
+
+fn pr_status_str(s: &atn_core::pr::PrStatus) -> &'static str {
+    match s {
+        atn_core::pr::PrStatus::Open => "open",
+        atn_core::pr::PrStatus::Merged => "merged",
+        atn_core::pr::PrStatus::Rejected => "rejected",
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let head: String = s.chars().take(max - 1).collect();
+    format!("{head}…")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1487,5 +1803,157 @@ mod tests {
         );
         // Degenerate case: no `state` field → full JSON fallback.
         assert_eq!(state_label(&json!({"foo": 1})), "{\"foo\":1}");
+    }
+
+    fn sample_pr() -> atn_core::pr::PrRecord {
+        atn_core::pr::PrRecord {
+            id: "alice-feature-7d80570".into(),
+            agent_id: "alice".into(),
+            source_repo: "/tmp/work".into(),
+            branch: "feature".into(),
+            target: "main".into(),
+            commit: "7d8057045f89".into(),
+            summary: "feature ready for review".into(),
+            status: atn_core::pr::PrStatus::Open,
+            created_at: "2026-04-25T00:00:00Z".into(),
+            merge_commit: None,
+            merged_at: None,
+            rejected_at: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn prs_table_lays_out_columns_and_padding() {
+        let prs = vec![sample_pr()];
+        let out = format_prs_table(&prs);
+        let lines: Vec<&str> = out.lines().collect();
+        // Header + dashed rule + 1 row.
+        assert_eq!(lines.len(), 3);
+        for header in ["ID", "AGENT", "BRANCH → TARGET", "STATUS", "SUMMARY"] {
+            assert!(
+                lines[0].contains(header),
+                "missing header {header} in {:?}",
+                lines[0]
+            );
+        }
+        assert!(lines[2].contains("alice-feature-7d80570"));
+        assert!(lines[2].contains("feature → main"));
+        assert!(lines[2].contains("open"));
+        assert!(lines[2].contains("feature ready for review"));
+    }
+
+    #[test]
+    fn prs_table_truncates_long_summary() {
+        let mut pr = sample_pr();
+        pr.summary = "A".repeat(200);
+        let out = format_prs_table(&[pr]);
+        let row = out.lines().nth(2).unwrap();
+        // 80-char cap means the cell shows 79 As + the ellipsis,
+        // which serializes as 3 UTF-8 bytes.
+        assert!(row.contains("…"));
+        let count_a = row.matches('A').count();
+        assert_eq!(count_a, 79, "expected 79 As before the ellipsis, got {count_a}");
+    }
+
+    #[test]
+    fn prs_table_empty_helper_prints_marker() {
+        // The pure formatter still produces header + rule for empty input.
+        let out = format_prs_table(&[]);
+        assert_eq!(out.lines().count(), 2);
+        assert!(out.contains("ID"));
+    }
+
+    #[test]
+    fn pr_show_includes_optional_fields_when_set() {
+        let mut pr = sample_pr();
+        pr.status = atn_core::pr::PrStatus::Merged;
+        pr.merge_commit = Some("aaa1111".into());
+        pr.merged_at = Some("2026-04-25T01:00:00Z".into());
+        pr.last_error = Some("flaked once but recovered".into());
+        let out = format_pr_show(&pr);
+        assert!(out.contains("status:       merged"));
+        assert!(out.contains("merge_commit: aaa1111"));
+        assert!(out.contains("merged_at:    2026-04-25T01:00:00Z"));
+        assert!(out.contains("last_error:   flaked once but recovered"));
+        assert!(!out.contains("rejected_at"), "rejected_at should be omitted when None");
+    }
+
+    #[test]
+    fn pr_show_for_open_pr_omits_lifecycle_fields() {
+        let pr = sample_pr();
+        let out = format_pr_show(&pr);
+        assert!(out.contains("status:       open"));
+        for omitted in ["merge_commit", "merged_at", "rejected_at", "last_error"] {
+            assert!(
+                !out.contains(omitted),
+                "expected open PR to omit {omitted}; got: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn pr_status_str_round_trip() {
+        assert_eq!(pr_status_str(&atn_core::pr::PrStatus::Open), "open");
+        assert_eq!(pr_status_str(&atn_core::pr::PrStatus::Merged), "merged");
+        assert_eq!(pr_status_str(&atn_core::pr::PrStatus::Rejected), "rejected");
+    }
+
+    #[test]
+    fn pr_status_arg_url_encodes_filter() {
+        assert_eq!(PrStatusArg::Open.as_str(), "open");
+        assert_eq!(PrStatusArg::Merged.as_str(), "merged");
+        assert_eq!(PrStatusArg::Rejected.as_str(), "rejected");
+    }
+
+    #[test]
+    fn truncate_keeps_short_strings_intact() {
+        assert_eq!(truncate("hello", 80), "hello");
+        assert_eq!(truncate("", 80), "");
+    }
+
+    #[test]
+    fn truncate_trims_with_ellipsis_at_max() {
+        let s: String = "x".repeat(100);
+        let out = truncate(&s, 80);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 80);
+    }
+
+    #[test]
+    fn pr_conflict_with_stderr_surfaces_to_user() {
+        let body = serde_json::to_string(&json!({
+            "error": "merge failed",
+            "stderr": "CONFLICT (content): Merge conflict in a.txt\nAutomatic merge failed; fix conflicts and then commit the result.",
+        }))
+        .unwrap();
+        assert_eq!(
+            report_pr_conflict("merge", "alice-feature-abc1234", &body),
+            EXIT_NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn pr_conflict_with_status_field_falls_back_cleanly() {
+        // The "PR not Open" branch on merge/reject sends `{error, status}`
+        // (no stderr); make sure we don't choke.
+        let body = serde_json::to_string(&json!({
+            "error": "pr is not open",
+            "status": "merged",
+        }))
+        .unwrap();
+        assert_eq!(
+            report_pr_conflict("merge", "alice-feature-abc1234", &body),
+            EXIT_NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn pr_conflict_with_garbage_body_still_exits_2() {
+        // Defensive: a 409 with an unparseable body still exits 2 cleanly.
+        assert_eq!(
+            report_pr_conflict("merge", "alice-feature-abc1234", "not json"),
+            EXIT_NOT_FOUND
+        );
     }
 }

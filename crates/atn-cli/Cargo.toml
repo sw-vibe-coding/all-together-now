@@ -8,6 +8,7 @@ name = "atn-cli"
 path = "src/main.rs"
 
 [dependencies]
+atn-core = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
