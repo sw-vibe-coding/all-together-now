@@ -1,0 +1,11 @@
+{
+  "task_type": "rust-project-init",
+  "state": {
+    "number": 4,
+    "step": "prs-cli"
+  },
+  "action": "rust-project-init: extend clap subcommand tree; add atn-core to dep so DTOs are shared; reuse 5-col table pattern from format_agents_table; report_pr_conflict shaped after report_etag_conflict; PrsServerGuard split off rather than overloading existing ServerGuard since the prs path needs git fixture setup; integration test confirms the atn-cli call actually lands a merge commit on the central repo's main, end-to-end.",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T18:45:46"
+}
