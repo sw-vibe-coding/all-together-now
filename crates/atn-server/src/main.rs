@@ -1,4 +1,5 @@
 mod heat;
+mod prs;
 mod router;
 mod watchdog_actor;
 
@@ -53,6 +54,9 @@ struct SharedState {
     base_dir: PathBuf,
     /// Path to agents.toml for saving config.
     config_path: PathBuf,
+    /// `/api/prs` registry: where PR records live + central repo
+    /// for `git merge`. Populated from `--prs-dir` / `--central-repo`.
+    prs: prs::PrsState,
 }
 
 type AppState = SharedState;
@@ -157,15 +161,30 @@ async fn main() {
 
     tracing::info!("All Together Now — PGM server starting");
 
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| DEFAULT_CONFIG_PATH.to_string());
-    let config_path = PathBuf::from(&config_path);
-
+    let parsed = parse_server_args();
+    let config_path = parsed.config_path;
     let base_dir = config_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf();
+    let prs_dir = parsed
+        .prs_dir
+        .unwrap_or_else(|| base_dir.join(".atn").join("prs"));
+    if let Err(e) = std::fs::create_dir_all(&prs_dir) {
+        tracing::warn!("create --prs-dir {}: {e}", prs_dir.display());
+    }
+    let central_repo = parsed.central_repo.unwrap_or_else(|| {
+        prs_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| base_dir.clone())
+    });
+    tracing::info!(
+        "/api/prs: prs_dir={} central_repo={}",
+        prs_dir.display(),
+        central_repo.display()
+    );
 
     let project_config = load_project_config(&config_path).unwrap_or_else(|e| {
         tracing::error!("Failed to load {}: {e}", config_path.display());
@@ -251,6 +270,7 @@ async fn main() {
         heat: heat_map,
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
+        prs: prs::PrsState::new(prs_dir, central_repo),
     };
 
     // Spawn config hot-reload watcher.
@@ -289,6 +309,10 @@ async fn main() {
         .route("/api/saga/distill", post(saga_distill))
         .route("/api/agents/{id}/saga", get(get_agent_saga))
         .route("/api/events", get(list_events).post(submit_event))
+        .route("/api/prs", get(prs::list_prs))
+        .route("/api/prs/{id}", get(prs::get_pr))
+        .route("/api/prs/{id}/merge", post(prs::merge_pr))
+        .route("/api/prs/{id}/reject", post(prs::reject_pr))
         .route("/api/wiki", get(wiki_list_pages))
         .route(
             "/api/wiki/{*title}",
@@ -2034,4 +2058,50 @@ async fn submit_event(
 
     // The background router will pick it up on next poll.
     StatusCode::ACCEPTED
+}
+
+/// Parsed CLI args.
+struct ServerArgs {
+    config_path: PathBuf,
+    prs_dir: Option<PathBuf>,
+    central_repo: Option<PathBuf>,
+}
+
+/// Parse the (small) atn-server arg shape: a positional config
+/// path (defaults to `agents.toml`) plus optional `--prs-dir` and
+/// `--central-repo` flags. Both `--flag value` and `--flag=value`
+/// forms are accepted.
+fn parse_server_args() -> ServerArgs {
+    let mut iter = std::env::args().skip(1);
+    let mut config_path: Option<PathBuf> = None;
+    let mut prs_dir: Option<PathBuf> = None;
+    let mut central_repo: Option<PathBuf> = None;
+    while let Some(a) = iter.next() {
+        if let Some(v) = a.strip_prefix("--prs-dir=") {
+            prs_dir = Some(PathBuf::from(v));
+            continue;
+        }
+        if let Some(v) = a.strip_prefix("--central-repo=") {
+            central_repo = Some(PathBuf::from(v));
+            continue;
+        }
+        match a.as_str() {
+            "--prs-dir" => prs_dir = iter.next().map(PathBuf::from),
+            "--central-repo" => central_repo = iter.next().map(PathBuf::from),
+            other if other.starts_with("--") => {
+                tracing::warn!("atn-server: unknown flag {other:?}, ignoring");
+            }
+            _ => {
+                if config_path.is_none() {
+                    config_path = Some(PathBuf::from(a));
+                }
+            }
+        }
+    }
+    ServerArgs {
+        config_path: config_path
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH)),
+        prs_dir,
+        central_repo,
+    }
 }
