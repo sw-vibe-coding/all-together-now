@@ -1,6 +1,6 @@
 number = 2
 slug = "syncd-push-and-record"
-status = "in-progress"
+status = "completed"
 description = """
 ## Step 2: detect → push → record
 
@@ -8,5 +8,6 @@ Replace step 1's stub handler with the..."""
 role = "production"
 context_files = []
 created_at = "2026-04-24T15:23:47"
+completed_at = "2026-04-24T17:55:33"
 task_type = "rust-project-init"
-commits = []
+commits = ["6733b028d5328f4f18d47edae7cc6f6f16153964"]
