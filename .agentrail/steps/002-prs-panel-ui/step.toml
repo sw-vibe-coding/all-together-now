@@ -1,0 +1,12 @@
+number = 2
+slug = "prs-panel-ui"
+status = "pending"
+description = """
+## Step 2: PR panel UI (read-only) + `/api/prs/{id}/diff`
+
+Mirror the wiki si..."""
+role = "production"
+context_files = []
+created_at = "2026-04-24T19:23:34"
+task_type = "yew-component"
+commits = []

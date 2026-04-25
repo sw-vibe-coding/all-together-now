@@ -1,0 +1,12 @@
+number = 4
+slug = "prs-filter-and-search"
+status = "pending"
+description = """
+## Step 4: Status chips + agent filter + free-text search
+
+Bring the events-v..."""
+role = "production"
+context_files = []
+created_at = "2026-04-24T19:23:34"
+task_type = "yew-component"
+commits = []
