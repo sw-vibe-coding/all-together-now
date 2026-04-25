@@ -1,6 +1,6 @@
 number = 2
 slug = "syncd-push-and-record"
-status = "pending"
+status = "in-progress"
 description = """
 ## Step 2: detect → push → record
 
