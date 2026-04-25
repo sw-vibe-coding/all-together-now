@@ -1,0 +1,11 @@
+{
+  "task_type": "pre-commit",
+  "state": {
+    "number": 5,
+    "step": "git-sync-integration-and-docs"
+  },
+  "action": "pre-commit: integration test uses env!(CARGO_BIN_EXE_atn-syncd) for hermetic binary spawn (no PATH lookup); demo script uses mktemp -d + trap EXIT cleanup pattern matching demos/atn-agent; ATN_PORT=0 + grep 'atn-server ready on' for free-port discovery (same trick as the screenshot+atn-cli integration tests); receive.denyCurrentBranch=ignore on central + clone agents from central so histories overlap (prevents --allow-unrelated-histories headache during merge); also picked up Cargo.lock change from step-4 atn-core dep that hadn't been committed",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T18:59:37"
+}
