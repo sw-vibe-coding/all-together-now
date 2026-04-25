@@ -1,6 +1,6 @@
 number = 1
 slug = "syncd-scaffold"
-status = "in-progress"
+status = "completed"
 description = """
 ## Step 1: atn-syncd scaffold + marker detection
 
@@ -8,5 +8,6 @@ Stand up the `atn-syncd` cr..."""
 role = "production"
 context_files = []
 created_at = "2026-04-24T15:23:30"
+completed_at = "2026-04-24T17:42:52"
 task_type = "rust-workspace-setup"
-commits = []
+commits = ["e4ec6551b13cf0313e3f68532ee378894457af3f"]
