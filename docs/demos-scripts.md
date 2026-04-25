@@ -34,6 +34,7 @@ time window.
 |10 | atn-cli tour — agents / events / wiki   | 5 min    | No                    |
 |11 | Events view polish + wiki side-panel    | 5 min    | No                    |
 |12 | atn-agent end-to-end (stub or Ollama)   | 5 min    | No                    |
+|13 | git-sync-agents end-to-end              | 4 min    | No                    |
 
 What is **not** demoable yet: the Ollama / CUDA transports (future
 sagas). Everything else in the scale-UI saga (search, chips, grouping,
@@ -815,6 +816,95 @@ rm -rf .atn-demo-atn-agent
 
 ---
 
+## Demo 13 — git-sync-agents end-to-end
+
+**What it shows** (git-sync-agents saga, steps 1–5)
+- The one-host subset of `docs/uber-use-case.md`: a bare central
+  remote, two agent worktrees (`alice`, `bob`), one `atn-server`,
+  and one `atn-syncd` per worktree. Each agent drops a
+  `.atn-ready-to-pr` marker; the syncd processes push the named
+  branch as `refs/heads/pr/<agent>-<branch>` and write a
+  `PrRecord` JSON; `atn-cli prs list` + `prs merge` lands both
+  commits on central `main`.
+
+**Why it matters**
+- This is the simplest concrete answer to "how does a multi-agent
+  squad propose, review, and merge work without humans pasting
+  diffs around?". The marker file is the only protocol — no
+  GitHub PRs, no diff service, no extra coordination state.
+
+**Setup**
+```bash
+./demos/git-sync/setup.sh
+```
+
+The script is fully self-contained: it `mktemp -d`s a workspace,
+builds `atn-server + atn-syncd + atn-cli`, sets up the central +
+two clones, spawns the daemon trio with `ATN_PORT=0`, drops
+markers, waits up to 12 s for both PR JSONs to appear, then runs
+the `prs list` / `prs merge` flow and prints the central log.
+All child processes + the workspace are cleaned up on exit.
+
+**Steps (what `setup.sh` does)**
+1. `git init --bare central.git`. Configure
+   `receive.denyCurrentBranch=ignore` so syncd's pushes to
+   `refs/heads/pr/*` always go through.
+2. Clone central into `alice/` and `bob/`. Each branches off
+   (`feature` for alice, `feature-z` for bob), commits a file,
+   and stays on the feature branch.
+3. Boot `atn-server agents.toml --prs-dir <prs> --central-repo
+   <central>` with `ATN_PORT=0`; parse the resolved port from
+   `atn-server ready on …`.
+4. Spawn `atn-syncd --repo alice --agent-id alice` and the same
+   for bob. Both poll every 1 s.
+5. `printf 'summary=…' > <repo>/.atn-ready-to-pr` on both
+   worktrees.
+6. Within ~1–2 polls, both syncds:
+   - `git push origin feature:refs/heads/pr/alice-feature`
+   - `git rev-parse feature` → SHA
+   - Write `<prs>/alice-feature-<short>.json`
+   - Rename the marker to `.atn-ready-to-pr.queued.<short>`.
+7. `atn-cli prs list --status open` shows both records:
+   ```
+   ID                     AGENT  BRANCH → TARGET     STATUS  SUMMARY
+   ---------------------  -----  ------------------  ------  -------
+   alice-feature-d11bba4  alice  feature → main      open    alice: feature ready for review
+   bob-feature-z-f761c82  bob    feature-z → main    open    bob: feature-z ready for review
+   ```
+8. `atn-cli prs merge <id>` for each. The server runs
+   `git merge --no-ff refs/heads/pr/<agent>-<branch>` on central,
+   flips the JSON to `status=merged`, and stamps `merge_commit`
+   + `merged_at`.
+9. `git -C central log --oneline main` confirms both commits
+   landed:
+   ```
+   0099f1d Merge refs/heads/pr/bob-feature-z
+   c279eb6 Merge refs/heads/pr/alice-feature
+   f761c82 bob: add feature-z
+   352fe03 init
+   d11bba4 alice: add feature
+   ```
+10. `atn-cli prs list --status merged` shows both records on
+    the merged side.
+
+**Cleanup**
+- The script cleans up itself (kills the three daemons, removes
+  `mktemp` dir on `trap EXIT`).
+
+**Variations**
+- Run `atn-cli prs reject <id>` instead of `prs merge` on one of
+  the records to see the no-git-side-effects path (`status` →
+  `rejected`, `rejected_at` stamped).
+- Force a conflict: edit the same file as alice on the central
+  worktree before merging, then `atn-cli prs merge` — the server
+  returns 409 with the captured stderr, the CLI exits 2, and the
+  server runs `git merge --abort` so the central worktree stays
+  clean.
+- Run `atn-syncd` with `--dry-run` to see the parse + would-push
+  log without touching the remote.
+
+---
+
 ## Picking one for a short slot
 
 - **Under 5 min, no infra**: Demo 1 + the preview bit of Demo 2.
@@ -834,6 +924,10 @@ rm -rf .atn-demo-atn-agent
 - **Rust-native AI-agent story**: Demo 12 (atn-agent). `--stub`
   mode is the fastest path to "how does a tool-calling agent
   interact with ATN" without any model install.
+- **Multi-agent PR + merge story**: Demo 13 (git-sync-agents).
+  Two agents, one central remote, marker-driven push, `atn-cli
+  prs merge` lands the commits — the cleanest answer to "how do
+  agents propose work without humans copy-pasting diffs?".
 
 ## When new demos arrive
 
@@ -851,6 +945,8 @@ See also:
 - [docs/atn-cli.md](./atn-cli.md) — typed CLI reference + recipes
 - [docs/atn-agent.md](./atn-agent.md) — Rust-native agent wrapper
   (Ollama `/api/chat` + tool-calling)
+- [docs/git-sync-agents.md](./git-sync-agents.md) — `atn-syncd` +
+  `/api/prs` + `atn-cli prs` end-to-end
 - [docs/scale-ui.md](./scale-ui.md) — the 21-agent scale-UI walkthrough
   (legacy)
 - [docs/remote-pty.md](./remote-pty.md) — manual remote PTY

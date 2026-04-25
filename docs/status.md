@@ -1,6 +1,28 @@
 # All Together Now — Status
 
-## Current State: atn-agent Saga Complete
+## Current State: Git-Sync-Agents Saga Complete
+
+New per-agent daemon `atn-syncd` watches each agent's worktree
+for a `.atn-ready-to-pr` marker; when one shows up, it pushes the
+named branch as `refs/heads/pr/<agent>-<branch>` to a configured
+central remote and writes a `PrRecord` JSON into `<prs-dir>/<id>.json`.
+`atn-server` exposes the registry via `GET /api/prs` (with
+`?status=open|merged|rejected` filter), `GET /api/prs/{id}`,
+`POST /api/prs/{id}/merge` (runs `git merge --no-ff` on
+`--central-repo`; flips `status` + stamps `merge_commit` /
+`merged_at`; 409 on conflict with `{error, stderr}` + auto
+`merge --abort`), and `POST /api/prs/{id}/reject`. `atn-cli prs
+{list, show, merge, reject}` drives the surface from the
+terminal. End-to-end demo: two agent worktrees + one bare
+central + one atn-server + per-agent atn-syncd processes — both
+PRs land merge commits on central main without humans copy-
+pasting diffs. 30 unit tests across atn-syncd / atn-server::prs /
+atn-cli + 4 integration tests (atn-syncd binary fixture,
+`/api/prs` HTTP, atn-cli prs round-trip, two-agent demo). See
+[docs/git-sync-agents.md](./git-sync-agents.md) and
+[demos-scripts.md § Demo 13](./demos-scripts.md#demo-13--git-sync-agents-end-to-end).
+
+## Prior Milestone: atn-agent Saga Complete
 
 New Rust-native agent wrapper `atn-agent` runs as an ATN
 `launch_command`, polls `<atn-dir>/inboxes/<id>/` for messages,
@@ -87,6 +109,7 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | `atn-replay` | Complete | PTY transcript viewer: screenshot, dashboard (org-mode), HTML output |
 | `atn-cli` | Complete | Typed HTTP client for every REST endpoint (agents / events / wiki) |
 | `atn-agent` | Complete | Rust-native AI-agent wrapper (Ollama `/api/chat` + 5 tools) |
+| `atn-syncd` | Complete | Out-of-band git-sync daemon (marker → push → `PrRecord`) |
 | `atn-ui` | Placeholder | Yew frontend (server uses embedded static HTML) |
 
 ## Phase Summary
@@ -139,6 +162,11 @@ End-to-end multi-agent demo working with reg-rs regression test.
 | A3 | atn-agent: `file_read` + `file_write` tools + path sandboxing + tool-call dispatch loop | Done |
 | A4 | atn-agent: `shell_exec` (gated, 30 s timeout, 4 KiB cap) + `outbox_send` + `inbox_ack` tools | Done |
 | A5 | atn-agent: integration test (stub HTTP) + `docs/atn-agent.md` + Demo 12 + A1..A5 status rows | Done |
+| G1 | atn-syncd scaffold + marker detection: clap CLI + poll loop + atn-core::pr | Done |
+| G2 | atn-syncd: marker parser + `git push <remote> <branch>:refs/heads/pr/<agent>-<branch>` + `PrRecord` JSON write + queued-marker rename | Done |
+| G3 | atn-server: `/api/prs` REST surface (list / show / merge / reject) + `--prs-dir` / `--central-repo` flags | Done |
+| G4 | atn-cli: `prs {list, show, merge, reject}` against the new REST + 5-col table + 409 stderr surfacing | Done |
+| G5 | atn-syncd binary integration test + `docs/git-sync-agents.md` + `demos/git-sync/setup.sh` + Demo 13 + G1..G5 status rows | Done |
 
 ## Demo
 
@@ -173,7 +201,7 @@ Three log files per agent in `.atn/logs/{agent_id}/`:
 
 ## Architecture
 
-Cargo workspace with 9 crates (library-first design):
+Cargo workspace with 10 crates (library-first design):
 - **atn-core**: pure domain types, no async, no I/O
 - **atn-pty**: PTY session lifecycle via portable-pty + tokio
 - **atn-server**: Axum binary with REST + SSE + embedded static UI
@@ -182,6 +210,7 @@ Cargo workspace with 9 crates (library-first design):
 - **atn-replay**: PTY transcript rendering (vt100 + clap)
 - **atn-cli**: typed HTTP client for the REST API (clap + ureq)
 - **atn-agent**: Rust-native AI-agent wrapper (clap + ureq + Ollama /api/chat)
+- **atn-syncd**: out-of-band git-sync daemon (marker → push → `PrRecord`)
 - **atn-ui**: Yew components (placeholder)
 
 ## Known Issues
