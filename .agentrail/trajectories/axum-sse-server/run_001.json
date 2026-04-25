@@ -1,0 +1,11 @@
+{
+  "task_type": "axum-sse-server",
+  "state": {
+    "number": 1,
+    "step": "prs-sse-stream"
+  },
+  "action": "axum-sse-server: notify::recommended_watcher on a dedicated OS thread + std::sync::mpsc + recv_timeout-based 50ms coalescing window; tokio::sync::broadcast for fan-out so multiple dashboard tabs share one watcher; tokio::sync::mpsc + ReceiverStream::map for the SSE wire; canonicalize prs_dir before watch (macos_kqueue + relative path was the smoke test gotcha); per-watcher HashSet<id> distinguishes Created vs Updated without a database; mutating routes push Updated to the broadcast directly to defend against fs-event coalescing; integration test reads curl --no-buffer line-by-line and looks for snake-case event tags + the new id substring; pre-existing atn-cli env-mutation flake fixed via OnceLock<Mutex>",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T21:04:04"
+}

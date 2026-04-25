@@ -1,6 +1,6 @@
 number = 1
 slug = "prs-sse-stream"
-status = "pending"
+status = "completed"
 description = """
 ## Step 1: `/api/prs/stream` SSE endpoint + filesystem watcher
 
@@ -8,5 +8,6 @@ Drive the das..."""
 role = "production"
 context_files = []
 created_at = "2026-04-24T19:23:34"
+completed_at = "2026-04-24T21:04:04"
 task_type = "axum-sse-server"
-commits = []
+commits = ["93fbc644cd4a575b649fcb050c71b4cc27af57e6"]
