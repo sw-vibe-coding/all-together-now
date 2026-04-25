@@ -4,6 +4,7 @@ pub mod controller;
 pub mod error;
 pub mod event;
 pub mod inbox;
+pub mod pr;
 pub mod router;
 pub mod shell;
 pub mod spawn_spec;

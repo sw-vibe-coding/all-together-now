@@ -192,6 +192,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "atn-syncd"
+version = "0.1.0"
+dependencies = [
+ "atn-core",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "atn-trail"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,12 @@
+number = 2
+slug = "syncd-push-and-record"
+status = "pending"
+description = """
+## Step 2: detect → push → record
+
+Replace step 1's stub handler with the..."""
+role = "production"
+context_files = []
+created_at = "2026-04-24T15:23:47"
+task_type = "rust-project-init"
+commits = []
