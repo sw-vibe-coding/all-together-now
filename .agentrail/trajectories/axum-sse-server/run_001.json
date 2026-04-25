@@ -1,0 +1,11 @@
+{
+  "task_type": "axum-sse-server",
+  "state": {
+    "number": 3,
+    "step": "prs-rest-endpoint"
+  },
+  "action": "axum-sse-server: spawn_blocking around fs+git work; serde_json::json! for error bodies; atomic write via tempfile+rename; integration test follows the screenshot_endpoint pattern (ServerGuard parses ATN_PORT=0 resolved port from 'atn-server ready on'); fixture clones central into work so both share history (otherwise merge needs --allow-unrelated-histories); receive.denyCurrentBranch=ignore on central kept it permissive; key debug: git's conflict markers go to stdout while 'Automatic merge failed' lands on stderr — combined both for the 409 body",
+  "result": "success",
+  "reward": 1,
+  "timestamp": "2026-04-24T18:39:17"
+}
