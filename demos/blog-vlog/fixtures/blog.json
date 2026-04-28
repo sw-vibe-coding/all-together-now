@@ -1,0 +1,8 @@
+{
+    "name": "blog",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/atn-blog",
+    "project": "blog-vlog",
+    "agent": "claude"
+}
