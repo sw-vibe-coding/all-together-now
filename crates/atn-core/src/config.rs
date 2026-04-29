@@ -77,6 +77,11 @@ impl AgentEntry {
             None => self.launch_command.clone(),
         };
         let watchdog = self.spec.as_ref().and_then(|s| s.watchdog);
+        let env = self
+            .spec
+            .as_ref()
+            .map(|s| s.env.clone())
+            .unwrap_or_default();
         AgentConfig {
             id: AgentId(self.id.clone()),
             name: self.name.clone(),
@@ -85,6 +90,7 @@ impl AgentEntry {
             setup_commands: self.setup_commands.clone(),
             launch_command,
             watchdog,
+            env,
         }
     }
 }
@@ -240,6 +246,8 @@ agent = "codex"
                 project: Some("hlasm".to_string()),
                 agent: "codex".to_string(),
                 agent_args: None,
+                agent_prompt: None,
+                env: std::collections::HashMap::new(),
                 watchdog: None,
             }
         );

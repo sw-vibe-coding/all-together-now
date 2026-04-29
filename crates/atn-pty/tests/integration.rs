@@ -13,6 +13,7 @@ fn test_config(tmp: &std::path::Path) -> AgentConfig {
         setup_commands: vec![],
         launch_command: String::new(),
         watchdog: None,
+        env: std::collections::HashMap::new(),
     }
 }
 
@@ -202,6 +203,7 @@ async fn session_manager_lifecycle() {
         setup_commands: vec![],
         launch_command: String::new(),
         watchdog: None,
+        env: std::collections::HashMap::new(),
     };
 
     let id = mgr.spawn_agent(config).unwrap();
@@ -285,6 +287,8 @@ async fn remote_mosh_transport_records_expected_argv() {
         project: Some("hlasm".to_string()),
         agent: "codex".to_string(),
         agent_args: None,
+        agent_prompt: None,
+        env: std::collections::HashMap::new(),
         watchdog: None,
     };
 
@@ -318,6 +322,8 @@ async fn remote_ssh_transport_records_expected_argv() {
         project: None,
         agent: "opencode-z-ai-glm-5".to_string(),
         agent_args: Some("--resume".to_string()),
+        agent_prompt: None,
+        env: std::collections::HashMap::new(),
         watchdog: None,
     };
 
@@ -355,6 +361,7 @@ async fn pty_exit_sets_disconnected_state() {
         setup_commands: vec![],
         launch_command: "exit 0".to_string(),
         watchdog: None,
+        env: std::collections::HashMap::new(),
     };
 
     let id = mgr.spawn_agent(config).unwrap();

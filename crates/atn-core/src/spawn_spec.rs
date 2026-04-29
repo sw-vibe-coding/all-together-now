@@ -75,6 +75,13 @@ pub struct SpawnSpec {
     /// as the rest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_prompt: Option<String>,
+    /// Extra environment variables passed to the PTY shell. Useful for
+    /// `DISABLE_AUTOUPDATER=1` (claude) and similar startup opt-outs.
+    /// Applied on top of inherited env. Keys + values are sandboxed by
+    /// `validate()`'s FORBIDDEN_CHARS check so quotes / newlines can't
+    /// inject through.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub env: std::collections::HashMap<String, String>,
     /// Optional per-agent watchdog thresholds. Defaults apply when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watchdog: Option<WatchdogConfig>,
@@ -134,6 +141,17 @@ impl SpawnSpec {
                 && v.chars().any(|c| FORBIDDEN_CHARS.contains(&c))
             {
                 missing.push(static_label(label));
+            }
+        }
+
+        // Same FORBIDDEN_CHARS sandbox for env keys + values so quotes /
+        // newlines / backslashes can't escape the spawned shell's env.
+        for (k, v) in &self.env {
+            if k.chars().any(|c| FORBIDDEN_CHARS.contains(&c))
+                || v.chars().any(|c| FORBIDDEN_CHARS.contains(&c))
+            {
+                missing.push("env");
+                break;
             }
         }
 
@@ -206,6 +224,7 @@ fn static_label(label: &str) -> &'static str {
         "agent" => "agent",
         "agent_args" => "agent_args",
         "agent_prompt" => "agent_prompt",
+        "env" => "env",
         "role" => "role",
         "transport" => "transport",
         "project" => "project",
@@ -229,6 +248,7 @@ mod tests {
             agent: "claude".to_string(),
             agent_args: None,
             agent_prompt: None,
+            env: std::collections::HashMap::new(),
             watchdog: None,
         }
     }
@@ -245,6 +265,7 @@ mod tests {
             agent: "codex".to_string(),
             agent_args: None,
             agent_prompt: None,
+            env: std::collections::HashMap::new(),
             watchdog: None,
         }
     }

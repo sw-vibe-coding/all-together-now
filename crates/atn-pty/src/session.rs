@@ -56,6 +56,11 @@ impl PtySession {
         let mut cmd = CommandBuilder::new("bash");
         cmd.cwd(&config.repo_path);
         cmd.env("TERM", "xterm-256color");
+        // Apply per-agent env vars (e.g. DISABLE_AUTOUPDATER=1 for claude).
+        // These override TERM if the user provides a TERM in env.
+        for (k, v) in &config.env {
+            cmd.env(k, v);
+        }
 
         let child = pair
             .slave

@@ -5,5 +5,8 @@
     "working_dir": "/Users/mike/github/softwarewrighter/factory-line/coordinator",
     "project": "factory-line",
     "agent": "claude",
-    "agent_prompt": "read AGENTS.md and follow it"
+    "agent_prompt": "read AGENTS.md and follow it",
+    "env": {
+        "DISABLE_AUTOUPDATER": "1"
+    }
 }

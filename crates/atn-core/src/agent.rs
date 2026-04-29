@@ -44,6 +44,12 @@ pub struct AgentConfig {
     /// no max-running ceiling). Populated from `SpawnSpec.watchdog`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watchdog: Option<WatchdogConfig>,
+    /// Extra environment variables passed to the PTY shell. Applied on
+    /// top of the inherited env + the always-set `TERM=xterm-256color`.
+    /// Useful for `DISABLE_AUTOUPDATER=1` (claude) and similar opt-outs
+    /// that gate startup.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 /// Current state of an agent session.
@@ -92,6 +98,7 @@ mod tests {
             setup_commands: vec!["cd /tmp".to_string()],
             launch_command: "claude".to_string(),
             watchdog: None,
+            env: std::collections::HashMap::new(),
         };
         let json = serde_json::to_string(&config).unwrap();
         let back: AgentConfig = serde_json::from_str(&json).unwrap();

@@ -923,6 +923,7 @@ async fn create_agent(
         setup_commands: Vec::new(),
         launch_command: launch_command.clone(),
         watchdog: spec.watchdog,
+        env: spec.env.clone(),
     };
 
     {
