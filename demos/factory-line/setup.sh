@@ -78,11 +78,15 @@ post_fixture() {
     local path="$1"
     local payload
     if [ -n "$agent_override" ]; then
+        # When swapping in a non-AI agent (typically `bash` for the
+        # wiring smoke test), drop agent_prompt — bash/sh would treat
+        # 'read AGENTS.md and follow it' as a script path and exit.
         payload="$(python3 -c "
 import json, sys
 with open('$path') as f:
     spec = json.load(f)
 spec['agent'] = '$agent_override'
+spec.pop('agent_prompt', None)
 print(json.dumps(spec))
 ")"
     else
