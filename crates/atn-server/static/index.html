@@ -513,6 +513,11 @@
             <button class="layout-btn" data-layout="stack">Stack</button>
             <button class="layout-btn" data-layout="carousel">Carousel</button>
         </div>
+        <div class="layout-selector" id="size-selector" title="Tile sizing — Heat = treemap by activity, Equal = uniform CSS grid">
+            <span class="layout-label">size</span>
+            <button class="layout-btn active" data-size="heat">Heat</button>
+            <button class="layout-btn" data-size="equal">Equal</button>
+        </div>
         <div class="layout-selector" id="sort-selector" title="Window sort order">
             <span class="layout-label">sort</span>
             <button class="layout-btn active" data-sort="name">Name</button>
@@ -1585,6 +1590,7 @@
             // Windowed UI saga (step 1): layout + sort modes.
             layoutMode: 'tiled', // 'tiled' (step 1) | future 'stack' | 'carousel'
             sortMode: 'name',    // 'name' (step 1) | future 'recent'
+            sizeMode: 'heat',    // 'heat' (treemap by activity) | 'equal' (uniform CSS grid)
             // Windowed UI saga (step 2): per-window state + click-selected.
             windows: {}, // { [id]: { state: 'normal'|'minimized'|'maximized', pinned: bool } }
             selectedId: null,
@@ -1679,6 +1685,7 @@
                     groupBy: layoutState.groupBy,
                     layoutMode: layoutState.layoutMode,
                     sortMode: layoutState.sortMode,
+                    sizeMode: layoutState.sizeMode,
                     windows: windowsOut,
                 });
                 localStorage.setItem(LAYOUT_PREFS_KEY, data);
@@ -1706,6 +1713,7 @@
                 const data = JSON.stringify({
                     layoutMode: layoutState.layoutMode,
                     sortMode: layoutState.sortMode,
+                    sizeMode: layoutState.sizeMode,
                     selectedId: layoutState.selectedId,
                     windows: windowsOut,
                     eventsFilter: {
@@ -1735,6 +1743,9 @@
                 }
                 if (data.sortMode === 'name' || data.sortMode === 'recent') {
                     layoutState.sortMode = data.sortMode;
+                }
+                if (data.sizeMode === 'heat' || data.sizeMode === 'equal') {
+                    layoutState.sizeMode = data.sizeMode;
                 }
                 if (typeof data.selectedId === 'string' || data.selectedId === null) {
                     layoutState.selectedId = data.selectedId;
@@ -1872,6 +1883,9 @@
                 }
                 if (data.sortMode === 'name' || data.sortMode === 'recent') {
                     layoutState.sortMode = data.sortMode;
+                }
+                if (data.sizeMode === 'heat' || data.sizeMode === 'equal') {
+                    layoutState.sizeMode = data.sizeMode;
                 }
                 if (data.windows && typeof data.windows === 'object') {
                     for (const [id, w] of Object.entries(data.windows)) {
@@ -2276,12 +2290,16 @@
             document.querySelectorAll('.layout-btn[data-sort]').forEach((btn) => {
                 btn.addEventListener('click', () => setSortMode(btn.dataset.sort));
             });
+            document.querySelectorAll('.layout-btn[data-size]').forEach((btn) => {
+                btn.addEventListener('click', () => setSizeMode(btn.dataset.size));
+            });
             document.querySelectorAll('.carousel-btn[data-carousel]').forEach((btn) => {
                 const dir = btn.dataset.carousel === 'next' ? 1 : -1;
                 btn.addEventListener('click', () => carouselCycle(dir));
             });
             updateLayoutSelector();
             updateSortSelector();
+            updateSizeSelector();
             updateCarouselNav();
         }
 
@@ -2671,10 +2689,35 @@
         function enableTreemapMode() {
             const dashboard = document.getElementById('dashboard');
             if (!dashboard) return;
+            // Honor the user-selected size mode. `Equal` runs the regular
+            // CSS-grid (`.dashboard.cols-N`) — no treemap-mode class, no
+            // heat-driven sizing. `Heat` is the existing treemap behavior.
+            if (layoutState.sizeMode === 'equal') {
+                dashboard.classList.remove('treemap-mode');
+                refreshDashboardLayout();
+                layoutState.enabled = false;
+                return;
+            }
             dashboard.classList.add('treemap-mode');
             dashboard.classList.remove('cols-1', 'cols-2', 'cols-3', 'cols-4');
             layoutState.enabled = true;
             applyLayout(computeLayout(dashboard));
+        }
+
+        function setSizeMode(mode) {
+            if (mode !== 'heat' && mode !== 'equal') return;
+            if (layoutState.sizeMode === mode) return;
+            layoutState.sizeMode = mode;
+            saveLayoutPrefs();
+            updateSizeSelector();
+            // Re-apply: enableTreemapMode now branches on sizeMode.
+            enableTreemapMode();
+        }
+
+        function updateSizeSelector() {
+            document.querySelectorAll('.layout-btn[data-size]').forEach((btn) => {
+                btn.classList.toggle('active', btn.dataset.size === layoutState.sizeMode);
+            });
         }
 
         const STATE_LABELS = {
