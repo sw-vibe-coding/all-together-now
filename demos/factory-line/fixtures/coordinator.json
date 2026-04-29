@@ -1,0 +1,9 @@
+{
+    "name": "coordinator",
+    "role": "coordinator",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/factory-line/coordinator",
+    "project": "factory-line",
+    "agent": "claude",
+    "agent_prompt": "read AGENTS.md and follow it"
+}

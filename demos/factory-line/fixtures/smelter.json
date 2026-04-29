@@ -1,0 +1,9 @@
+{
+    "name": "smelter",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/factory-line/smelter",
+    "project": "factory-line",
+    "agent": "codex",
+    "agent_prompt": "read AGENTS.md and follow it"
+}

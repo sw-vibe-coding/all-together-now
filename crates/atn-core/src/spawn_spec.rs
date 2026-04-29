@@ -68,6 +68,13 @@ pub struct SpawnSpec {
     /// Optional free-form args appended to the agent command.
     #[serde(default)]
     pub agent_args: Option<String>,
+    /// Optional initial-prompt positional argument. Compose wraps this
+    /// in single quotes so multi-word prompts (e.g., "read AGENTS.md
+    /// and follow it") survive the shell. Single quotes in the value
+    /// are forbidden (validated against the same FORBIDDEN_CHARS list
+    /// as the rest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_prompt: Option<String>,
     /// Optional per-agent watchdog thresholds. Defaults apply when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watchdog: Option<WatchdogConfig>,
@@ -121,6 +128,7 @@ impl SpawnSpec {
             ("working_dir", Some(self.working_dir.as_str())),
             ("agent", Some(self.agent.as_str())),
             ("agent_args", self.agent_args.as_deref()),
+            ("agent_prompt", self.agent_prompt.as_deref()),
         ] {
             if let Some(v) = value
                 && v.chars().any(|c| FORBIDDEN_CHARS.contains(&c))
@@ -166,7 +174,11 @@ impl SpawnSpec {
             Some(args) if !args.is_empty() => format!("{} {}", self.agent, args),
             _ => self.agent.clone(),
         };
-        let inner = format!("cd {} && {}", self.working_dir, agent_tail);
+        let prompt_tail = match self.agent_prompt.as_ref().map(|s| s.trim()) {
+            Some(p) if !p.is_empty() => format!(" '{p}'"),
+            _ => String::new(),
+        };
+        let inner = format!("cd {} && {}{}", self.working_dir, agent_tail, prompt_tail);
 
         match self.transport {
             Transport::Local => inner,
@@ -193,6 +205,7 @@ fn static_label(label: &str) -> &'static str {
         "working_dir" => "working_dir",
         "agent" => "agent",
         "agent_args" => "agent_args",
+        "agent_prompt" => "agent_prompt",
         "role" => "role",
         "transport" => "transport",
         "project" => "project",
@@ -215,6 +228,7 @@ mod tests {
             project: None,
             agent: "claude".to_string(),
             agent_args: None,
+            agent_prompt: None,
             watchdog: None,
         }
     }
@@ -230,6 +244,7 @@ mod tests {
             project: Some("hlasm".to_string()),
             agent: "codex".to_string(),
             agent_args: None,
+            agent_prompt: None,
             watchdog: None,
         }
     }

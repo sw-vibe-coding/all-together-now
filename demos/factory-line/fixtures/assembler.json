@@ -1,0 +1,9 @@
+{
+    "name": "assembler",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/factory-line/assembler",
+    "project": "factory-line",
+    "agent": "codex",
+    "agent_prompt": "read AGENTS.md and follow it"
+}

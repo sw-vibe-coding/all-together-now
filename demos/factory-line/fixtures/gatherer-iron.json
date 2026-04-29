@@ -1,0 +1,9 @@
+{
+    "name": "gatherer-iron",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/factory-line/gatherer-iron",
+    "project": "factory-line",
+    "agent": "codex",
+    "agent_prompt": "read AGENTS.md and follow it"
+}

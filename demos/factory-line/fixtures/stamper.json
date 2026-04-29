@@ -1,0 +1,9 @@
+{
+    "name": "stamper",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/factory-line/stamper",
+    "project": "factory-line",
+    "agent": "codex",
+    "agent_prompt": "read AGENTS.md and follow it"
+}

@@ -4,5 +4,5 @@
     "transport": "local",
     "working_dir": "/Users/mike/github/softwarewrighter/atn-explainer",
     "project": "blog-vlog",
-    "agent": "claude"
+    "agent": "opencode"
 }
