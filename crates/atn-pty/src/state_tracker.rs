@@ -16,8 +16,34 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// close to real time, long enough to be cheap.
 const WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PROMPT_MARKER: &[u8] = b"__ATN_READY__>";
-/// Claude Code displays a question mark or "?" prompt patterns when awaiting input.
-const QUESTION_MARKERS: &[&[u8]] = &[b"? ", b"(y/n)", b"[Y/n]", b"[y/N]"];
+/// Substrings in PTY output that classify the agent as awaiting human
+/// input.
+///
+/// Generic shell prompts: `? ` (question + space — read -p style),
+/// `(y/n)`, `[Y/n]`, `[y/N]` (apt/git/bash confirmation forms).
+///
+/// Claude Code permission dialog: claude renders `to proceed?` (no
+/// trailing space — newline + ANSI escapes follow) and emits an
+/// OSC 9 system notification `\x1b]9;Claude needs your permission`
+/// when waiting on a tool-use confirmation. Match either the inline
+/// dialog text or the OSC 9 prefix.
+///
+/// Codex / opencode: trust dialogs include the literal phrase
+/// `1. Yes, continue` / `1. Yes, proceed`. Match the menu prefix
+/// since the dialog is alt-screen and the surrounding text is full
+/// of ANSI escapes.
+const QUESTION_MARKERS: &[&[u8]] = &[
+    b"? ",
+    b"(y/n)",
+    b"[Y/n]",
+    b"[y/N]",
+    // Claude Code
+    b"to proceed?",
+    b"\x1b]9;Claude needs your permission",
+    // Codex / opencode trust dialogs
+    b"1. Yes, continue",
+    b"1. Yes, proceed",
+];
 
 /// Spawns a task that monitors PTY output and updates agent state accordingly.
 ///
@@ -189,5 +215,30 @@ mod tests {
     fn classify_general_output_as_running() {
         let data = b"compiling crate foo...";
         assert_eq!(classify_output(data), AgentState::Running);
+    }
+
+    #[test]
+    fn classify_claude_to_proceed_dialog() {
+        // Claude's permission dialog has "to proceed?" with no trailing
+        // space — newline + ANSI escapes follow. The pre-fix classifier
+        // missed this pattern.
+        let data = b"\x1b[1mDo you want to proceed?\x1b[0m\n  1. Yes\n  2. No";
+        assert_eq!(classify_output(data), AgentState::AwaitingHumanInput);
+    }
+
+    #[test]
+    fn classify_claude_osc9_permission_notification() {
+        // Claude emits an OSC 9 system notification when it wants tool
+        // permission. The escape sequence is `\x1b]9;<message>\x07`.
+        let data = b"\x1b]9;Claude needs your permission to use Bash\x07";
+        assert_eq!(classify_output(data), AgentState::AwaitingHumanInput);
+    }
+
+    #[test]
+    fn classify_codex_trust_dialog() {
+        // Codex / opencode trust dialogs render a numbered menu that
+        // we key off of. Lots of surrounding ANSI; match the menu line.
+        let data = b"\x1b[2J\x1b[H Trust this directory? \x1b[?25l\n  1. Yes, continue\n  2. No, quit\n";
+        assert_eq!(classify_output(data), AgentState::AwaitingHumanInput);
     }
 }
