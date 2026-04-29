@@ -4405,6 +4405,12 @@
                         tab.style.color = '#e94560';
                         playNotification();
                     }
+                    // Feed event-driven graph edges so the Graph view
+                    // shows real traffic (fades out over RECENT_EDGE_TTL_MS).
+                    recordEventEdges(entries);
+                    if (document.getElementById('graph-view').style.display !== 'none' && lastGraphNodes.length > 0) {
+                        renderGraph(lastGraphNodes);
+                    }
                     // If events view is active, refresh it
                     if (document.getElementById('events-view').style.display !== 'none') {
                         eventsRefresh();
@@ -4425,14 +4431,50 @@
             completed_task: '#064e3b', error: '#7f1d1d', disconnected: '#1f2937',
         };
 
+        // Recent event-driven edges with TTL. Populated by the events
+        // poller below; drawn (with opacity decaying to 0) on top of any
+        // explicit blocked_on edges. Topology-only fan-out (coord →
+        // every worker, regardless of activity) was dropped — the graph
+        // now reflects real traffic, not just registration.
+        const RECENT_EDGE_TTL_MS = 8000;
+        const recentEdges = []; // [{source, target, expiresAt}]
+        let lastGraphNodes = [];
+
+        function pruneRecentEdges() {
+            const now = Date.now();
+            for (let i = recentEdges.length - 1; i >= 0; i--) {
+                if (recentEdges[i].expiresAt <= now) recentEdges.splice(i, 1);
+            }
+        }
+
+        function recordEventEdges(entries) {
+            const now = Date.now();
+            for (const e of entries) {
+                const ev = e.event || e;
+                const src = ev.source_agent;
+                const tgt = ev.target_agent;
+                if (!src || !tgt) continue;
+                recentEdges.push({ source: src, target: tgt, expiresAt: now + RECENT_EDGE_TTL_MS });
+            }
+        }
+
         async function graphRefresh() {
             try {
                 const res = await fetch(`${API_BASE}/api/agents/graph`);
                 if (!res.ok) return;
                 const nodes = await res.json();
+                lastGraphNodes = nodes;
                 renderGraph(nodes);
             } catch (_) {}
         }
+
+        // Re-render every 1.5s while the graph tab is visible so event
+        // edges can fade out smoothly in their TTL window.
+        setInterval(() => {
+            if (document.getElementById('graph-view').style.display === 'none') return;
+            pruneRecentEdges();
+            if (lastGraphNodes.length > 0) renderGraph(lastGraphNodes);
+        }, 1500);
 
         function renderGraph(nodes) {
             const canvas = document.getElementById('graph-canvas');
@@ -4479,17 +4521,28 @@
             let svg = `<svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">`;
             svg += `<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560" /></marker></defs>`;
 
-            // Draw edges: coordinator → each other agent (bidirectional)
-            if (coordinator) {
-                const cp = positions[coordinator.id];
-                for (const other of others) {
-                    const op = positions[other.id];
-                    // Outbound: coordinator right edge → other left edge
-                    svg += `<line class="graph-edge" x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" marker-end="url(#arrowhead)" />`;
-                }
+            // Recent event-driven edges. Opacity decays linearly from 1
+            // (just-fired) to ~0 (about to expire). Last-write-wins per
+            // (source, target) so a fresh event resets the fade.
+            pruneRecentEdges();
+            const edgeMap = new Map(); // key=`${src}->${tgt}` → expiresAt (latest)
+            for (const e of recentEdges) {
+                const key = `${e.source}->${e.target}`;
+                const prev = edgeMap.get(key);
+                if (!prev || e.expiresAt > prev) edgeMap.set(key, e.expiresAt);
+            }
+            const now = Date.now();
+            for (const [key, expiresAt] of edgeMap.entries()) {
+                const [src, tgt] = key.split('->');
+                const from = positions[src];
+                const to = positions[tgt];
+                if (!from || !to) continue; // edge points at a deleted/unknown agent
+                const remaining = expiresAt - now;
+                const opacity = Math.max(0.15, Math.min(1, remaining / RECENT_EDGE_TTL_MS));
+                svg += `<line class="graph-edge" x1="${from.x + nodeW}" y1="${from.y + nodeH / 2}" x2="${to.x}" y2="${to.y + nodeH / 2}" marker-end="url(#arrowhead)" style="opacity:${opacity.toFixed(2)}" />`;
             }
 
-            // Also draw any explicit blocked_on edges
+            // Explicit blocked_on edges (full opacity).
             for (const node of nodes) {
                 const to = positions[node.id];
                 if (!to) continue;
