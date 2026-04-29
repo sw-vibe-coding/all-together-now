@@ -909,13 +909,38 @@
             }
         }
 
-        function fitSelectedTerm(id) {
-            const a = agents.get(id);
+        // Dedup fitAddon.fit() — calling it on every focus change creates
+        // a positive-feedback loop because each fit snaps cols/rows to
+        // the current host rect, and after the PTY echoes back the
+        // alt-screen redraw the host rect is a hair smaller, so the next
+        // focus shrinks one more column. Cache the host's last-fit
+        // dimensions on the agent entry; only refit when the host
+        // genuinely changed (window resize, layout mode change, tile
+        // promotion, etc.). 2 px tolerance absorbs sub-pixel layout
+        // noise.
+        function fitOnceIfChanged(agentId) {
+            const a = agents.get(agentId);
             if (!a || !a.fitAddon) return;
+            const host = document.getElementById(`term-tile-${agentId}`);
+            const rect = host ? host.getBoundingClientRect() : null;
+            const TOL = 2;
+            if (rect && a.lastFitW != null
+                && Math.abs(a.lastFitW - rect.width) < TOL
+                && Math.abs(a.lastFitH - rect.height) < TOL) {
+                return; // host hasn't moved since last fit — skip the loop
+            }
             try {
                 a.fitAddon.fit();
-                syncPtySize(id, a.term);
-            } catch (_) { /* xterm not rendered yet */ }
+                syncPtySize(agentId, a.term);
+                if (rect) {
+                    a.lastFitW = rect.width;
+                    a.lastFitH = rect.height;
+                }
+            } catch (_) { /* xterm not rendered yet; next call will work */ }
+        }
+
+        function fitSelectedTerm(id) {
+            fitOnceIfChanged(id);
         }
 
         function windowMinimize(id) {
@@ -1314,10 +1339,7 @@
             // Reset this tile's scale and fit xterm to its container.
             const scaleEl = document.getElementById(`term-scale-${agentId}`);
             if (scaleEl) scaleEl.style.setProperty('--term-k', '1');
-            try {
-                a.fitAddon.fit();
-                syncPtySize(agentId, a.term);
-            } catch (_) { /* xterm not rendered yet; next call will work */ }
+            fitOnceIfChanged(agentId);
             updateTileScales();
         }
 
