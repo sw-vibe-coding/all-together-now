@@ -164,3 +164,49 @@ sagas / bug fixes, not blockers for the walkthrough itself:
 - Router timing is `2 s` outbox poll + transcript flush latency.
   Phase tests should `sleep 3` after a POST before checking
   delivery state to avoid false negatives.
+- **State classifier is too narrow.** `state_tracker.rs` flips to
+  `AwaitingHumanInput` only on literal `? ` / `(y/n)` / `[Y/n]` /
+  `[y/N]` patterns. claude's permission dialog renders `to proceed?`
+  followed by a newline + ANSI escapes (no space after `?`), so the
+  classifier never matches and the dashboard's attn-pulse + sound
+  notifications never fire for a real claude permission gate. To
+  visually verify attn-pulse during the walkthrough, spawn a bash
+  agent and `read -p "? " answer` (block on input — no shell prompt
+  follows, so the PROMPT_MARKER doesn't take precedence). Long-term
+  fix: extend QUESTION_MARKERS with claude/codex specific patterns
+  or recognise OSC 9 system-notification sequences emitted by claude
+  on permission requests (e.g., `\x1b]9;Claude needs your permission`).
+
+## Phase (d) — visual attn-pulse verification
+
+`crates/atn-server/static/index.html` `@keyframes atn-attn-pulse` +
+`.dashboard .agent-panel.attn-needed` were added with the factory-line
+commit (`8b8fe1a`). Verification deferred until a real
+`awaiting_human_input` state could be triggered.
+
+Triggered via a synthetic bash agent:
+
+```
+curl -sS -X POST -H 'Content-Type: application/json' -d '{
+  "name":"attn-test","role":"worker","transport":"local",
+  "working_dir":"/tmp","agent":"bash"
+}' http://localhost:7500/api/agents
+
+curl -sS -X POST -H 'Content-Type: application/json' \
+  -d '{"text":"read -p \"? \" answer\r","raw_bytes":[]}' \
+  http://localhost:7500/api/agents/attn-test/input
+```
+
+Result (from a playwright probe + screenshot):
+
+| Check | Expected | Actual |
+|-------|----------|--------|
+| API state | `awaiting_human_input` | ✓ |
+| `.attn-needed` count in DOM | 2 (panel + sparkline cell) | ✓ |
+| Visual | amber outline on `panel-attn-test` + spark-cell | ✓ (confirmed in screenshot) |
+| Other agents | no `.attn-needed` | ✓ (coordinator unaffected) |
+| After clicking sparkline → `windowSelect(attn-test)` | class removed | ✓ (panel left with `agent-panel selected`, spark-cell back to plain) |
+
+attn-pulse mechanic works end-to-end. The classifier-too-narrow
+issue above is the only real blocker for this firing on real CLI
+permission dialogs in production.
