@@ -1,0 +1,8 @@
+{
+    "name": "alpha",
+    "role": "worker",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/self-test-line/alpha",
+    "project": "self-test-line",
+    "agent": "bash"
+}

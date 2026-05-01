@@ -1,0 +1,8 @@
+{
+    "name": "coordinator",
+    "role": "coordinator",
+    "transport": "local",
+    "working_dir": "/Users/mike/github/softwarewrighter/self-test-line/coordinator",
+    "project": "self-test-line",
+    "agent": "bash"
+}
