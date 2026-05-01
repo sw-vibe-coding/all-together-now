@@ -714,6 +714,106 @@
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <script>
         const API_BASE = '';
+
+        // ── Client-side debug log ────────────────────────────
+        // POSTs to /api/client-log so the server has an audit trail of
+        // what the dashboard JS actually did. Replaces the silent
+        // `catch (_) {}` blocks that previously masked render bugs.
+        // Every error path also surfaces to console + an in-page strip
+        // so DevTools-less debugging works.
+        function clientLog(level, source, message, data) {
+            const payload = {
+                level: String(level),
+                source: String(source),
+                message: String(message),
+            };
+            if (data !== undefined && data !== null) payload.data = data;
+            // Network call. If THIS fails we still want the user/console
+            // to see the original error — surface to console.error.
+            fetch(`${API_BASE}/api/client-log`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            }).catch((netErr) => {
+                console.error('clientLog network failure:', netErr, payload);
+            });
+            const fn = level === 'error' ? console.error
+                : (level === 'warn' ? console.warn : console.info);
+            fn(`[${source}] ${message}`, data || '');
+            if (level === 'error') showClientErrorStrip(source, message);
+        }
+
+        function showClientErrorStrip(source, message) {
+            let strip = document.getElementById('client-error-strip');
+            if (!strip) {
+                strip = document.createElement('div');
+                strip.id = 'client-error-strip';
+                strip.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#7f1d1d;color:#fecaca;padding:6px 12px;font:12px monospace;z-index:9999;cursor:pointer;border-top:1px solid #fbbf24;';
+                strip.title = 'Click to dismiss';
+                strip.addEventListener('click', () => { strip.style.display = 'none'; });
+                document.body.appendChild(strip);
+            }
+            strip.textContent = `[${source}] ${message} — click to dismiss`;
+            strip.style.display = 'block';
+        }
+
+        // ── Fetch instrumentation ─────────────────────────────
+        // Wrap every dashboard fetch so we can SEE start / end / fail in
+        // both the browser console and (periodically) on the server.
+        // Without this, Chrome's per-host connection limit silently
+        // queues fetches when SSE streams hold all 6 slots — invisible
+        // unless you reach for DevTools Network tab.
+        let _fetchSeq = 0;
+        const _inFlight = new Map(); // seq -> {source, url, method, t0}
+
+        async function loggedFetch(source, url, opts) {
+            const seq = ++_fetchSeq;
+            const method = (opts && opts.method) || 'GET';
+            const t0 = performance.now();
+            _inFlight.set(seq, { source, url, method, t0 });
+            console.info(`[fetch ${seq}] ${source} ${method} ${url} -> dispatched (in-flight=${_inFlight.size})`);
+            try {
+                const res = await fetch(url, opts);
+                const dt = (performance.now() - t0) | 0;
+                _inFlight.delete(seq);
+                console.info(`[fetch ${seq}] ${source} <- ${res.status} in ${dt}ms (in-flight=${_inFlight.size})`);
+                return res;
+            } catch (e) {
+                const dt = (performance.now() - t0) | 0;
+                _inFlight.delete(seq);
+                console.error(`[fetch ${seq}] ${source} ${method} ${url} FAILED after ${dt}ms: ${e}`);
+                clientLog('error', source + '.fetch', `${method} ${url} failed: ${e}`, { seq, dt_ms: dt });
+                throw e;
+            }
+        }
+
+        // Stall watchdog: every 3s, surface any fetches that have been
+        // in-flight longer than 5s — that's the "queued behind SSE"
+        // signature.
+        setInterval(() => {
+            if (_inFlight.size === 0) return;
+            const now = performance.now();
+            const stalled = [];
+            for (const [seq, info] of _inFlight.entries()) {
+                const ageMs = (now - info.t0) | 0;
+                if (ageMs > 5000) stalled.push({ seq, ...info, age_ms: ageMs });
+            }
+            if (stalled.length > 0) {
+                clientLog('warn', 'fetch.stalled', `${stalled.length} fetches stalled >5s (in-flight=${_inFlight.size})`, { stalled: stalled.map((s) => ({ seq: s.seq, source: s.source, url: s.url, age_ms: s.age_ms })) });
+            }
+        }, 3000);
+
+        // Capture uncaught exceptions + unhandled promise rejections so
+        // they end up in /api/client-log instead of the void.
+        window.addEventListener('error', (ev) => {
+            clientLog('error', 'window.onerror', ev.message || String(ev.error), {
+                filename: ev.filename, lineno: ev.lineno, colno: ev.colno,
+            });
+        });
+        window.addEventListener('unhandledrejection', (ev) => {
+            clientLog('error', 'unhandledrejection', String(ev.reason));
+        });
+
         const agents = new Map(); // id -> { term, fitAddon, evtSource, panel, heatRing, lastLine, mode }
 
         // --- Compact-tile state ---
@@ -2847,33 +2947,80 @@
             }).catch(() => {});
         }
 
+        // ── Multiplexed SSE ───────────────────────────────────
+        // ONE EventSource for the whole dashboard. Per-agent handlers
+        // register here. Without this, 6 agents × 1 SSE each = all 6
+        // Chrome connection slots used → every fetch queues forever.
+        const _sseHandlers = new Map(); // agent_id -> {onBytes, connDot}
+        let _muxSource = null;
+
+        function ensureMultiplexedSse() {
+            if (_muxSource) return;
+            const url = `${API_BASE}/api/agents/sse`;
+            clientLog('info', 'sse-mux.opening', url);
+            _muxSource = new EventSource(url);
+            _muxSource.onopen = () => {
+                clientLog('info', 'sse-mux.open', `connected, ${_sseHandlers.size} handlers registered`);
+                for (const h of _sseHandlers.values()) {
+                    if (h.connDot) h.connDot.className = 'conn-dot connected';
+                }
+            };
+            _muxSource.onmessage = (event) => {
+                let msg;
+                try {
+                    msg = JSON.parse(event.data);
+                } catch (e) {
+                    clientLog('error', 'sse-mux.parse', String(e), { sample: event.data && event.data.slice(0, 200) });
+                    return;
+                }
+                const handler = _sseHandlers.get(msg.agent_id);
+                if (!handler) return; // agent unmounted or unknown — drop
+                let bytes;
+                try {
+                    bytes = Uint8Array.from(atob(msg.bytes_b64), (c) => c.charCodeAt(0));
+                } catch (e) {
+                    clientLog('error', 'sse-mux.b64', String(e), { agent_id: msg.agent_id });
+                    return;
+                }
+                handler.onBytes(bytes);
+            };
+            _muxSource.onerror = () => {
+                clientLog('warn', 'sse-mux.error', 'EventSource error; reconnecting in 2s');
+                for (const h of _sseHandlers.values()) {
+                    if (h.connDot) h.connDot.className = 'conn-dot disconnected';
+                }
+                if (_muxSource) {
+                    _muxSource.close();
+                    _muxSource = null;
+                }
+                setTimeout(ensureMultiplexedSse, 2000);
+            };
+        }
+
         function connectSSE(agentId) {
             const connDot = document.getElementById(`conn-${agentId}`);
-            const evtSource = new EventSource(`${API_BASE}/api/agents/${agentId}/sse`);
             const agent = agents.get(agentId);
+            if (!agent) {
+                clientLog('error', 'connectSSE', `no agent entry for ${agentId} — skipping`);
+                return;
+            }
 
-            evtSource.onopen = () => {
-                if (connDot) connDot.className = 'conn-dot connected';
-            };
+            _sseHandlers.set(agentId, {
+                connDot,
+                onBytes: (bytes) => {
+                    if (agent.term) agent.term.write(bytes);
+                    recordOutputBytes(agentId, bytes);
+                    refreshCompactIfPresent(agentId);
+                },
+            });
 
-            evtSource.onmessage = (event) => {
-                const bytes = Uint8Array.from(atob(event.data), c => c.charCodeAt(0));
-                if (agent && agent.term) agent.term.write(bytes);
-                // Also feed the compact-tile renderer's last-line buffer.
-                recordOutputBytes(agentId, bytes);
-                refreshCompactIfPresent(agentId);
-            };
+            // Lazily open the shared stream on the first agent registration.
+            ensureMultiplexedSse();
+            // Compat field so existing code that checks `agent.evtSource`
+            // still sees something. The handle is the SHARED one.
+            agent.evtSource = _muxSource;
 
-            evtSource.onerror = () => {
-                if (connDot) connDot.className = 'conn-dot disconnected';
-                evtSource.close();
-                setTimeout(() => connectSSE(agentId), 2000);
-            };
-
-            agent.evtSource = evtSource;
-
-            // Forward all keystrokes from xterm.js directly to the PTY.
-            // This handles Enter, arrows, Tab, Escape, Ctrl combos, etc.
+            // Forward keystrokes per-agent (one POST per chunk; not SSE).
             agent.term.onData((data) => {
                 fetch(`${API_BASE}/api/agents/${agentId}/input`, {
                     method: 'POST',
@@ -3086,9 +3233,14 @@
             });
         }
 
+        const DASHBOARD_BUILD = 'sse-multiplexed-v4';
         async function init() {
-            const res = await fetch(`${API_BASE}/api/agents`);
+            clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
+            const res = await loggedFetch('init', `${API_BASE}/api/agents`);
             const agentList = sortAgents(await res.json());
+            clientLog('info', 'init.fetch', `/api/agents -> ${agentList.length} agents`, {
+                ids: agentList.map((a) => a.id),
+            });
 
             const dashboard = document.getElementById('dashboard');
             const count = agentList.length;
@@ -3204,7 +3356,14 @@
             window.atnDebug = atnDebug;
         }
 
-        init();
+        // Wrap init() so any throw — sync or async — surfaces via
+        // clientLog instead of dying silently. Without this, an early
+        // bug aborts the whole bootstrap and we get an empty dashboard
+        // with no diagnostics.
+        init().then(
+            () => clientLog('info', 'init.done', 'bootstrap complete'),
+            (err) => clientLog('error', 'init.threw', String(err), { stack: err && err.stack }),
+        );
 
         // ── Agent lifecycle controls ──────────────────────
 
@@ -3394,6 +3553,9 @@
             agents.set(agent.id, { term, fitAddon, panel, evtSource: null, nativeW, nativeH });
             connectSSE(agent.id);
             setupControls(agent.id);
+            clientLog('info', 'addAgentPanel', `mounted panel for ${agent.id}`, {
+                role: agent.role, panelId: panel.id, nativeW, nativeH,
+            });
             // Stack mode keeps a single primary; new agents join minimized
             // so they don't hijack the main slot.
             if (layoutState.layoutMode === 'stack') {
@@ -3643,6 +3805,7 @@
 
         // ── View switching ─────────────────────────────────
         function switchView(view) {
+            clientLog('info', 'switchView', `to ${view}`);
             document.getElementById('dashboard').style.display = view === 'agents' ? '' : 'none';
             document.getElementById('graph-view').style.display = view === 'graph' ? '' : 'none';
             document.getElementById('saga-view').style.display = view === 'saga' ? '' : 'none';
@@ -4435,7 +4598,7 @@
         let eventsPollCount = 0;
         setInterval(async () => {
             try {
-                const res = await fetch(`${API_BASE}/api/events?since=${eventsLastIndex}`);
+                const res = await loggedFetch('events-poll', `${API_BASE}/api/events?since=${eventsLastIndex}`);
                 if (!res.ok) return;
                 const entries = await res.json();
                 if (entries.length > 0) {
@@ -4459,7 +4622,9 @@
                         eventsRefresh();
                     }
                 }
-            } catch (_) {}
+            } catch (e) {
+                clientLog('error', 'events-poll', String(e), { stack: e && e.stack });
+            }
         }, 5000);
 
         // ── Dependency graph ─────────────────────────────────
@@ -4503,20 +4668,32 @@
 
         async function graphRefresh() {
             try {
-                const res = await fetch(`${API_BASE}/api/agents/graph`);
-                if (!res.ok) return;
+                const res = await loggedFetch('graphRefresh', `${API_BASE}/api/agents/graph`);
+                if (!res.ok) {
+                    clientLog('error', 'graphRefresh', `GET /api/agents/graph -> ${res.status}`);
+                    return;
+                }
                 const nodes = await res.json();
                 lastGraphNodes = nodes;
+                clientLog('info', 'graphRefresh', `fetched ${nodes.length} nodes`, {
+                    ids: nodes.map((n) => n.id),
+                });
                 renderGraph(nodes);
-            } catch (_) {}
+            } catch (e) {
+                clientLog('error', 'graphRefresh', String(e), { stack: e && e.stack });
+            }
         }
 
         // Re-render every 1.5s while the graph tab is visible so event
         // edges can fade out smoothly in their TTL window.
         setInterval(() => {
-            if (document.getElementById('graph-view').style.display === 'none') return;
-            pruneRecentEdges();
-            if (lastGraphNodes.length > 0) renderGraph(lastGraphNodes);
+            try {
+                if (document.getElementById('graph-view').style.display === 'none') return;
+                pruneRecentEdges();
+                if (lastGraphNodes.length > 0) renderGraph(lastGraphNodes);
+            } catch (e) {
+                clientLog('error', 'graph-tick', String(e), { stack: e && e.stack });
+            }
         }, 1500);
 
         function renderGraph(nodes) {

@@ -1,3 +1,4 @@
+mod client_log;
 mod heat;
 mod prs;
 mod prs_stream;
@@ -58,6 +59,10 @@ struct SharedState {
     /// `/api/prs` registry: where PR records live + central repo
     /// for `git merge`. Populated from `--prs-dir` / `--central-repo`.
     prs: prs::PrsState,
+    /// Bounded ring of client-side log entries posted by the dashboard
+    /// JS so we can introspect what the browser actually did. Backed
+    /// by `.atn/client-log.jsonl` for post-mortem.
+    client_log: client_log::ClientLogState,
 }
 
 type AppState = SharedState;
@@ -281,6 +286,7 @@ async fn main() {
         base_dir: base_dir.clone(),
         config_path: config_path.clone(),
         prs: prs::PrsState::new(prs_dir, central_repo, prs_broadcast),
+        client_log: client_log::ClientLogState::new(&base_dir),
     };
 
     // Spawn config hot-reload watcher.
@@ -307,6 +313,7 @@ async fn main() {
             axum::routing::put(update_agent).delete(delete_agent),
         )
         .route("/api/agents/{id}/sse", get(agent_sse))
+        .route("/api/agents/sse", get(agents_sse))
         .route("/api/agents/{id}/screenshot", get(agent_screenshot))
         .route("/api/agents/{id}/input", post(agent_input))
         .route("/api/agents/{id}/ctrl-c", post(agent_ctrl_c))
@@ -319,6 +326,10 @@ async fn main() {
         .route("/api/saga/distill", post(saga_distill))
         .route("/api/agents/{id}/saga", get(get_agent_saga))
         .route("/api/events", get(list_events).post(submit_event))
+        .route(
+            "/api/client-log",
+            get(client_log::list_client_log).post(client_log::submit_client_log),
+        )
         .route("/api/prs", get(prs::list_prs))
         .route("/api/prs/stream", get(prs_stream::pr_stream))
         .route("/api/prs/{id}", get(prs::get_pr))
@@ -570,6 +581,62 @@ async fn agent_sse(
         });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// GET /api/agents/sse — multiplexed stream of every agent's PTY
+/// output bytes. Solves the Chrome 6-connections-per-host limit: with
+/// per-agent SSE streams, 6 agents fill all slots and `/api/agents/graph`
+/// + every other fetch queues forever client-side. One stream → one
+/// connection → no queue.
+///
+/// Frame format: each line is JSON `{"agent_id":"<id>","bytes_b64":"<b64>"}`.
+/// Per-agent broadcast::Receivers are pumped into a shared mpsc by
+/// detached tasks. Snapshot at connect time — new agents added after
+/// connect won't show up until the client reconnects (acceptable for
+/// the demo; client refresh on agent registration is fine).
+async fn agents_sse(
+    State(state): State<AppState>,
+) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Event>(256);
+    let receivers: Vec<(String, tokio::sync::broadcast::Receiver<OutputSignal>)> = {
+        let mgr = state.manager.lock().await;
+        mgr.agent_ids()
+            .iter()
+            .filter_map(|id| {
+                mgr.get_session(id)
+                    .ok()
+                    .map(|s| (id.0.clone(), s.output_receiver()))
+            })
+            .collect()
+    };
+
+    for (agent_id, mut sub) in receivers {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match sub.recv().await {
+                    Ok(OutputSignal::Bytes(bytes)) => {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        let payload =
+                            format!("{{\"agent_id\":\"{agent_id}\",\"bytes_b64\":\"{b64}\"}}");
+                        if tx.send(Event::default().data(payload)).await.is_err() {
+                            break; // client disconnected
+                        }
+                    }
+                    Ok(_) => {} // non-byte signals (state changes, etc.) — ignore for now
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            "agents_sse: agent {agent_id} broadcast lagged by {n} frames"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(Ok::<Event, Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[derive(Deserialize)]
