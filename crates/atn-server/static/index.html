@@ -290,6 +290,17 @@
             animation: atn-attn-pulse 1.2s ease-in-out infinite;
         }
 
+        /* Brief flash on the panel header when carousel/focus shifts to
+           a new agent — draws the eye to the new context so you know
+           "you're now looking at <name>" without staring at the title bar. */
+        @keyframes atn-focus-flash {
+            0%   { background: #4ecca3; color: #0d1117; box-shadow: 0 0 18px 4px rgba(78, 204, 163, 0.6); }
+            100% { background: transparent; color: inherit; box-shadow: 0 0 0 0 transparent; }
+        }
+        .agent-panel .agent-header.focus-flash {
+            animation: atn-focus-flash 900ms ease-out;
+        }
+
         /* Keyboard hint — muted text in the top bar listing the bare-key
            bindings. Visible at all times; step 6 may make it dismissible. */
         .kbd-hint { font-size: 11px; color: #6b7280; margin-left: 8px; font-family: system-ui, sans-serif; }
@@ -990,6 +1001,7 @@
         //     (step 5) deselects and restores any maximized window.
 
         function windowSelect(id) {
+            const prevId = layoutState.selectedId;
             layoutState.selectedId = id;
             document.querySelectorAll('.agent-panel.selected').forEach((el) => {
                 el.classList.remove('selected');
@@ -997,6 +1009,11 @@
             if (id) {
                 const el = document.getElementById(`panel-${id}`);
                 if (el) el.classList.add('selected');
+                // Brief header flash when the focused agent actually changes
+                // (carousel arrow click, peek click, sparkline click) so the
+                // user sees "I'm now viewing <name>" without studying the
+                // title bar.
+                if (id !== prevId) flashAgentHeader(id);
                 // Selected tile gets a crisp xterm at its real size.
                 fitSelectedTerm(id);
                 // Clear the attention-pulse on the focused tile (and its
@@ -2401,9 +2418,28 @@
             }
             const n = eligible.length;
             const nextIdx = ((idx + delta) % n + n) % n;
-            layoutState.selectedId = eligible[nextIdx].id;
+            const newId = eligible[nextIdx].id;
+            const changed = newId !== layoutState.selectedId;
+            layoutState.selectedId = newId;
             saveLayoutPrefs();
             applyLayoutFresh();
+            if (changed) flashAgentHeader(newId);
+        }
+
+        // Briefly flashes an agent's panel header to draw attention to
+        // a focus change (carousel arrow, peek click, sparkline click).
+        // Removes any prior flash class before re-adding so a quick
+        // double-click retriggers the animation.
+        function flashAgentHeader(agentId) {
+            const panel = document.getElementById(`panel-${agentId}`);
+            if (!panel) return;
+            const header = panel.querySelector('.agent-header');
+            if (!header) return;
+            header.classList.remove('focus-flash');
+            // Force reflow so re-adding the class restarts the animation.
+            void header.offsetWidth;
+            header.classList.add('focus-flash');
+            setTimeout(() => header.classList.remove('focus-flash'), 1000);
         }
 
         function setupLayoutSelector() {
@@ -3336,7 +3372,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'carousel-full-height-v14';
+        const DASHBOARD_BUILD = 'focus-flash-v15';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
