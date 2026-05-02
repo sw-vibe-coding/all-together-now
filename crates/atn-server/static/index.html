@@ -1414,19 +1414,32 @@
         function updateTileScales() {
             for (const [id, a] of agents.entries()) {
                 if (a.mode !== 'xterm') continue;
+                const scaleEl = document.getElementById(`term-scale-${id}`);
                 if (id === currentFocusId) {
-                    const scaleEl = document.getElementById(`term-scale-${id}`);
                     if (scaleEl) scaleEl.style.setProperty('--term-k', '1');
                     continue;
                 }
                 const host = document.getElementById(`term-tile-${id}`);
-                const scaleEl = document.getElementById(`term-scale-${id}`);
                 if (!host || !scaleEl) continue;
                 const hostRect = host.getBoundingClientRect();
                 const { w: natW, h: natH } = nativeTermSize(id);
+                const raw = Math.min(hostRect.width / natW, hostRect.height / natH);
+                if (raw < COMPACT_THRESHOLD) {
+                    // Too small even at the lowest snap → compact.
+                    toggleCompactMode(id);
+                    continue;
+                }
+                if (raw >= 1.0) {
+                    // Host is larger than native — instead of capping at
+                    // scale 1.0 and leaving dead space, refit xterm to
+                    // grow into the available area. cols/rows expand.
+                    scaleEl.style.setProperty('--term-k', '1');
+                    fitOnceIfChanged(id);
+                    continue;
+                }
+                // Host is smaller than native — snap to a discrete scale.
                 const k = pickTermScale(hostRect.width, hostRect.height, natW, natH);
                 if (k === null) {
-                    // Too small for xterm — drop to compact automatically.
                     toggleCompactMode(id);
                 } else {
                     scaleEl.style.setProperty('--term-k', String(k));
@@ -3311,7 +3324,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'convertEol-v11';
+        const DASHBOARD_BUILD = 'fit-grows-to-host-v12';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
