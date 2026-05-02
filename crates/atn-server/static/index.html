@@ -2633,13 +2633,14 @@
                 const peekW = Math.floor(rect.w * PEEK_FRAC);
                 const peekGap = 8;
                 const primaryW = rect.w - 2 * (peekW + peekGap);
-                // Use full dashboard height for primary + peeks. The
-                // previous 0.9/0.7 height fractions left ~10%/30% of
-                // empty space top+bottom of the dashboard area for no
-                // reason — peeks are at the SIDES, not above/below, so
-                // they don't need vertical room.
-                const primaryH = rect.h;
-                const peekH = rect.h;
+                // Leave a tiny bottom safety margin so the panel's send
+                // row doesn't get clipped at the viewport edge — the
+                // dashboard's clientHeight measurement can include a
+                // few pixels that aren't actually visible. 8 px is
+                // imperceptible visually but solidly fixes the cut-off.
+                const BOTTOM_SAFETY = 8;
+                const primaryH = Math.max(200, rect.h - BOTTOM_SAFETY);
+                const peekH = primaryH;
                 const primaryRect = {
                     id: focused.id,
                     x: rect.x + peekW + peekGap,
@@ -3472,7 +3473,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'drop-empty-state-v25';
+        const DASHBOARD_BUILD = 'carousel-bottom-safety-v26';
 
         // ── Demos catalog (alphabetical by key) ───────────────
         // Each demo registers its own bash agents, then walks the user
