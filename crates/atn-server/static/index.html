@@ -2805,8 +2805,28 @@
             // heat-driven sizing. `Heat` is the existing treemap behavior.
             if (layoutState.sizeMode === 'equal') {
                 dashboard.classList.remove('treemap-mode');
+                // CRITICAL: treemap mode set inline left/top/width/height
+                // on every panel. Those inline styles override CSS grid;
+                // without clearing them, switching to Equal looks identical
+                // to Heat until a hard-reload. Same for the off-screen
+                // hidden panels (left:-9999px). Reset all of them.
+                for (const id of agents.keys()) {
+                    const el = document.getElementById(`panel-${id}`)
+                        || document.getElementById(`compact-${id}`);
+                    if (!el) continue;
+                    el.style.left = '';
+                    el.style.top = '';
+                    el.style.width = '';
+                    el.style.height = '';
+                    el.style.zIndex = '';
+                    el.classList.remove('pinned', 'focus', 'selected');
+                }
                 refreshDashboardLayout();
                 layoutState.enabled = false;
+                // Refit each xterm against the new equal-grid container size.
+                requestAnimationFrame(() => {
+                    for (const id of agents.keys()) fitOnceIfChanged(id);
+                });
                 return;
             }
             dashboard.classList.add('treemap-mode');
@@ -3029,17 +3049,25 @@
             // before live SSE takes over — without this, an idle agent
             // (no new bytes flowing) renders a blank panel after reload.
             // The screenshot endpoint reads the transcript file and
-            // re-emits it as ANSI; xterm interprets the escape sequences
-            // and reproduces the visible state.
-            loggedFetch('connectSSE.replay', `${API_BASE}/api/agents/${agentId}/screenshot?format=ansi&rows=40&cols=120`)
-                .then((r) => r.ok ? r.text() : null)
-                .then((ansi) => {
-                    if (ansi && agent.term) {
-                        agent.term.write(ansi);
-                        clientLog('info', 'connectSSE.replay', `${agentId} replayed ${ansi.length} chars`);
-                    }
-                })
-                .catch((e) => clientLog('warn', 'connectSSE.replay', `${agentId} replay failed: ${e}`));
+            // re-emits it as ANSI for a SPECIFIC geometry. We must use
+            // the xterm's current cols/rows so the wrapped lines match
+            // the panel's actual width — using a fixed 40×120 produces
+            // staggered wrap when xterm is at a different geometry.
+            // We also schedule the replay via requestAnimationFrame
+            // so the layout's first fit (in applyLayout) runs first.
+            requestAnimationFrame(() => {
+                const cols = (agent.term && agent.term.cols) || 120;
+                const rows = (agent.term && agent.term.rows) || 40;
+                loggedFetch('connectSSE.replay', `${API_BASE}/api/agents/${agentId}/screenshot?format=ansi&rows=${rows}&cols=${cols}`)
+                    .then((r) => r.ok ? r.text() : null)
+                    .then((ansi) => {
+                        if (ansi && agent.term) {
+                            agent.term.write(ansi);
+                            clientLog('info', 'connectSSE.replay', `${agentId} replayed ${ansi.length} chars at ${cols}x${rows}`);
+                        }
+                    })
+                    .catch((e) => clientLog('warn', 'connectSSE.replay', `${agentId} replay failed: ${e}`));
+            });
 
             // Lazily open the shared stream on the first agent registration.
             ensureMultiplexedSse();
@@ -3260,7 +3288,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'refit-on-layout-v6';
+        const DASHBOARD_BUILD = 'equal-clear-inline-v7';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
