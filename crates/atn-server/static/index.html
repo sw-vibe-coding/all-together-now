@@ -2954,6 +2954,13 @@
                 scrollback: 5000,
                 cols: TERM_NATIVE_COLS,
                 rows: TERM_NATIVE_ROWS,
+                // Without this, plain LF (\n) advances the row but
+                // keeps the cursor in the previous column — producing
+                // "staggered" output when the screenshot-replay endpoint
+                // emits \n-only line endings (some vt100 emulator outputs
+                // do). With convertEol, term.write() turns each \n into
+                // \r\n internally so wrapped lines start at col 0.
+                convertEol: true,
                 fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
                 theme: {
                     background: '#0d1117',
@@ -3304,7 +3311,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'cols4-auto-rows-v10';
+        const DASHBOARD_BUILD = 'convertEol-v11';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
