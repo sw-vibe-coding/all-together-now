@@ -112,10 +112,15 @@
         .dock-cell .dock-last { font-family: monospace; font-size: 9px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         .agent-panel { display: flex; flex-direction: column; border: 1px solid #0f3460; border-radius: 6px; background: #16213e; min-height: 300px; overflow: auto; }
+        /* agent-header keeps tile-actions + state-badge right-anchored;
+           agent-name now flex-grows + centers its text so the panel
+           title sits in the middle of the header (workaround for
+           sparkline-row sometimes overlapping the left edge of the
+           page header). */
         .agent-header { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
-        .agent-header .agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; }
-        .agent-header .agent-role { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
-        .agent-header .spacer { flex: 1; }
+        .agent-header .agent-name { font-size: 14px; font-weight: 600; color: #c9d1d9; flex: 1; text-align: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .agent-header .agent-role { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+        .agent-header .spacer { display: none; }
 
         .state-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
         .state-starting    { background: #1f2937; color: #9ca3af; }
@@ -3381,7 +3386,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'sparkline-row-fit-v17';
+        const DASHBOARD_BUILD = 'centered-panel-title-v18';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
