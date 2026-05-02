@@ -8,7 +8,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #1a1a2e; color: #e0e0e0; font-family: system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
-        header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; align-items: center; gap: 12px; flex-shrink: 0; position: relative; z-index: 30; }
         header h1 { font-size: 18px; font-weight: 600; color: #e94560; }
         header .agent-count { font-size: 13px; color: #888; }
 
@@ -226,9 +226,13 @@
         /* Sparkline row — always-visible strip above the dashboard with one
            cell per agent (flex 1/n). Click to focus. The pinned 📌 icon in
            a cell indicates that window is locked-in-place on the dashboard. */
-        .sparkline-row { display: none; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #0f3460; background: #16213e; flex-shrink: 0; }
+        /* sparkline-row stays a single horizontal row no matter how many
+           agents — flex-wrap: nowrap is explicit, and min-width per cell
+           is small enough that a dozen+ cells can compress before they
+           need to wrap. z-index keeps the row below the page header. */
+        .sparkline-row { display: none; gap: 4px; padding: 6px 8px; border-bottom: 1px solid #0f3460; background: #16213e; flex-shrink: 0; flex-wrap: nowrap; overflow: hidden; position: relative; z-index: 5; }
         .sparkline-row.visible { display: flex; }
-        .spark-cell { flex: 1 1 0; min-width: 80px; height: 56px; border: 1px solid #0f3460; border-radius: 6px; background: #0d1117; padding: 4px 8px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; position: relative; }
+        .spark-cell { flex: 1 1 0; min-width: 0; max-width: 240px; height: 56px; border: 1px solid #0f3460; border-radius: 6px; background: #0d1117; padding: 4px 8px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; overflow: hidden; position: relative; }
         .spark-cell:hover { border-color: #4ecca3; }
         .spark-cell.selected { border-color: #4ecca3; }
         .spark-cell.pinned { border-color: #fbbf24; }
@@ -3377,7 +3381,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'focus-flash-everywhere-v16';
+        const DASHBOARD_BUILD = 'sparkline-row-fit-v17';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
