@@ -2560,19 +2560,25 @@
                 return { windows: [primaryRect], minimized: implicitDock };
             }
 
-            // Otherwise lay out normal-state agents (dock minimized separately).
-            const normal = all.filter((it) => windowState(it.id) === 'normal');
-            if (normal.length === 0) return { windows: [], minimized };
+            // Tiled mode: every agent gets a tile, regardless of any
+            // stored `minimized` state. Minimize is a Stack/Carousel
+            // affordance (one primary + dock); in Tiled it would just
+            // leave the worker grid empty and the right half of the
+            // screen wasted. So we treat `all` as the layout pool and
+            // return an empty `minimized` array — the dock-row stays
+            // hidden because nothing's in it.
+            const tiledPool = all;
+            if (tiledPool.length === 0) return { windows: [], minimized: [] };
 
-            const coordIdx = normal.findIndex((it) => roleOf(it.id) === 'coordinator');
-            const coord = coordIdx >= 0 ? normal[coordIdx] : null;
+            const coordIdx = tiledPool.findIndex((it) => roleOf(it.id) === 'coordinator');
+            const coord = coordIdx >= 0 ? tiledPool[coordIdx] : null;
             const workers = coord
-                ? normal.filter((_, i) => i !== coordIdx)
-                : normal.slice();
+                ? tiledPool.filter((_, i) => i !== coordIdx)
+                : tiledPool.slice();
 
-            if (!coord) return { windows: gridRects(rect, workers), minimized };
+            if (!coord) return { windows: gridRects(rect, workers), minimized: [] };
             if (workers.length === 0) {
-                return { windows: [{ id: coord.id, ...rect }], minimized };
+                return { windows: [{ id: coord.id, ...rect }], minimized: [] };
             }
             const coordW = Math.floor(rect.w * COORD_FRAC) - TILE_GAP / 2;
             const coordRect = { id: coord.id, x: rect.x, y: rect.y, w: coordW, h: rect.h };
@@ -2584,7 +2590,7 @@
             };
             return {
                 windows: [coordRect, ...gridRects(workerArea, workers)],
-                minimized,
+                minimized: [],
             };
         }
 
@@ -3288,7 +3294,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'equal-clear-inline-v7';
+        const DASHBOARD_BUILD = 'tiled-uses-all-v8';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
