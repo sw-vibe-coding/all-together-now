@@ -3473,7 +3473,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'carousel-bottom-safety-v26';
+        const DASHBOARD_BUILD = 'demos-ai-mode-v27';
 
         // ── Demos catalog (alphabetical by key) ───────────────
         // Each demo registers its own bash agents, then walks the user
@@ -3482,44 +3482,68 @@
         const DEMOS = {
             'factory-line': {
                 name: 'factory-line',
-                description: 'Factorio-style 6-agent production chain (gather → smelt → stamp → assemble)',
+                description: 'Factorio-style 6-agent production chain — REAL AI agents (claude/codex/opencode)',
                 projectRoot: '/Users/mike/github/softwarewrighter/factory-line',
+                // Per-agent CLI matches demos/factory-line/fixtures/*.json so the
+                // demo actually shows AI TUIs (the point of an "agent" demo).
+                // Trade-off: each AI CLI may pause for permissions / trust dialogs
+                // that the user must handle manually in step 2.
                 agents: [
-                    { name: 'coordinator', role: 'coordinator', subdir: 'coordinator' },
-                    { name: 'gatherer-iron', role: 'worker', subdir: 'gatherer-iron' },
-                    { name: 'gatherer-coal', role: 'worker', subdir: 'gatherer-coal' },
-                    { name: 'smelter', role: 'worker', subdir: 'smelter' },
-                    { name: 'stamper', role: 'worker', subdir: 'stamper' },
-                    { name: 'assembler', role: 'worker', subdir: 'assembler' },
+                    { name: 'coordinator',   role: 'coordinator', subdir: 'coordinator',
+                      agent: 'claude', agent_prompt: 'read AGENTS.md and follow it',
+                      env: { DISABLE_AUTOUPDATER: '1' } },
+                    { name: 'gatherer-iron', role: 'worker', subdir: 'gatherer-iron', agent: 'codex' },
+                    { name: 'gatherer-coal', role: 'worker', subdir: 'gatherer-coal', agent: 'opencode', agent_args: 'run' },
+                    { name: 'smelter',       role: 'worker', subdir: 'smelter',       agent: 'codex' },
+                    { name: 'stamper',       role: 'worker', subdir: 'stamper',       agent: 'codex' },
+                    { name: 'assembler',     role: 'worker', subdir: 'assembler',     agent: 'codex' },
                 ],
-                kickoffPrompt: 'Goal: build 2 gadgets and 2 gizmos.\n\nRead AGENTS.md and follow it.',
                 steps: [
                     {
                         id: 'setup',
-                        title: 'Register agents',
-                        body: 'Tearing down any existing topology and registering 6 bash agents (coordinator + 5 workers).',
+                        title: 'Register AI agents',
+                        body: 'Tearing down any existing topology and registering 6 AI agents (claude coordinator + 4 codex workers + 1 opencode worker). Each will boot its own TUI in its panel.',
                         auto: true,
                         action: 'setup',
                     },
                     {
                         id: 'permissions',
-                        title: 'Grant permissions (if any)',
-                        body: 'Each agent panel is now showing a bash shell. If any panel needs your input (e.g. a permission prompt), click into it and respond. When all agents look idle and ready, click Proceed.',
+                        title: 'Grant permissions in each panel',
+                        body: 'Each AI CLI may show a trust / permission dialog on first run. Click into each agent panel and respond (typically `1` or Enter to allow). When all 6 panels are past their dialogs and showing the agent prompt, click Proceed.',
                         button: 'Proceed',
                     },
                     {
                         id: 'kickoff',
-                        title: 'Drive the production line',
-                        body: 'Sending tasks down the chain via direct PTY input (bash mode — no AI required). Watch the Events tab as messages flow.',
+                        title: 'Send the goal to coordinator',
+                        body: 'Typing the goal into coordinator\'s PTY: <code>"build 2 gadgets and 2 gizmos"</code>. Coordinator (claude) will read AGENTS.md and dispatch tasks to the workers via <code>./atn-send</code>.',
                         auto: true,
-                        action: 'driveBash',
+                        action: 'kickoffAI',
                     },
                     {
                         id: 'observe',
-                        title: 'Verify',
-                        body: 'Switch between tabs to confirm: Events shows 5 routed Done messages; Wiki shows Production__Goals + Inventory__* + Production__Log; output/widget.txt was written. Click Done when satisfied.',
+                        title: 'Watch the agents coordinate',
+                        body: 'Events tab fills as coordinator dispatches and workers reply. Graph tab shows red active edges + blue fading edges per event. Wiki tab will show Production__Goals once coordinator seeds it. Click Done when complete (or stuck — known gap: codex sandbox blocks curl localhost; workers may not be able to send Done back without that fix).',
                         button: 'Done',
                     },
+                ],
+            },
+            'factory-line-bash': {
+                name: 'factory-line-bash',
+                description: 'Same chain but ALL bash agents — deterministic mechanics test, no AI',
+                projectRoot: '/Users/mike/github/softwarewrighter/factory-line',
+                agents: [
+                    { name: 'coordinator',   role: 'coordinator', subdir: 'coordinator',   agent: 'bash' },
+                    { name: 'gatherer-iron', role: 'worker',      subdir: 'gatherer-iron', agent: 'bash' },
+                    { name: 'gatherer-coal', role: 'worker',      subdir: 'gatherer-coal', agent: 'bash' },
+                    { name: 'smelter',       role: 'worker',      subdir: 'smelter',       agent: 'bash' },
+                    { name: 'stamper',       role: 'worker',      subdir: 'stamper',       agent: 'bash' },
+                    { name: 'assembler',     role: 'worker',      subdir: 'assembler',     agent: 'bash' },
+                ],
+                steps: [
+                    { id: 'setup', title: 'Register 6 bash agents', body: 'Bash mode — fast, deterministic, no permission prompts.', auto: true, action: 'setup' },
+                    { id: 'permissions', title: 'Ready to drive', body: 'Bash agents have no permission gates. Click Proceed to drive the DAG.', button: 'Proceed' },
+                    { id: 'kickoff', title: 'Drive the production line (bash)', body: 'Sending tasks via direct PTY input. Watch Events.', auto: true, action: 'driveBash' },
+                    { id: 'observe', title: 'Verify', body: 'Events: 5 Dones. Wiki: Production__* + Inventory__*. output/widget.txt written. Click Done.', button: 'Done' },
                 ],
             },
             'self-test-line': {
@@ -3527,9 +3551,9 @@
                 description: '3-agent regression test (write → ack → cross-confirm chain on a wiki page)',
                 projectRoot: '/Users/mike/github/softwarewrighter/self-test-line',
                 agents: [
-                    { name: 'coordinator', role: 'coordinator', subdir: 'coordinator' },
-                    { name: 'alpha', role: 'worker', subdir: 'alpha' },
-                    { name: 'beta', role: 'worker', subdir: 'beta' },
+                    { name: 'coordinator', role: 'coordinator', subdir: 'coordinator', agent: 'bash' },
+                    { name: 'alpha', role: 'worker', subdir: 'alpha', agent: 'bash' },
+                    { name: 'beta', role: 'worker', subdir: 'beta', agent: 'bash' },
                 ],
                 steps: [
                     {
@@ -3627,6 +3651,8 @@
                     await demoSetup(demo);
                 } else if (step.action === 'driveBash') {
                     await demoDriveBash(demo);
+                } else if (step.action === 'kickoffAI') {
+                    await demoKickoffAI(demo);
                 }
                 advanceWizard();
             } catch (e) {
@@ -3671,17 +3697,36 @@
                     transport: 'local',
                     working_dir: `${demo.projectRoot}/${a.subdir}`,
                     project: demo.name,
-                    agent: 'bash',
+                    agent: a.agent || 'bash',
                 };
+                if (a.agent_args) spec.agent_args = a.agent_args;
+                if (a.agent_prompt) spec.agent_prompt = a.agent_prompt;
+                if (a.env) spec.env = a.env;
                 const res = await fetch(`${API_BASE}/api/agents`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(spec),
                 });
                 if (!res.ok) throw new Error(`POST ${a.name} -> ${res.status}`);
-                wizardLog(`  ✓ ${a.name}`);
+                wizardLog(`  ✓ ${a.name} (${spec.agent})`);
             }
-            wizardLog(`✓ topology registered. reload may be needed for full UI sync.`);
+            wizardLog(`✓ topology registered. dashboard auto-mounts in ~2s via pollStates.`);
+        }
+
+        // Send a kickoff prompt to coordinator's PTY so the AI agent
+        // (claude) reads its AGENTS.md and starts dispatching workers.
+        async function demoKickoffAI(demo) {
+            const goal = 'build 2 gadgets and 2 gizmos';
+            const text = `Goal: ${goal}.\n\nRead ./AGENTS.md and follow it. Compute totals, dispatch gatherer-iron and gatherer-coal in parallel via ./atn-send, then smelter, stamper, assembler. Print SESSION COMPLETE when assembler reports Done.`;
+            wizardLog(`sending goal to coordinator's PTY...`);
+            const res = await fetch(`${API_BASE}/api/agents/coordinator/input`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text + '\r', raw_bytes: [] }),
+            });
+            if (!res.ok) throw new Error(`POST /input -> ${res.status}`);
+            wizardLog(`✓ goal delivered. claude will respond shortly.`);
+            wizardLog(`(open Events tab to watch dispatches; codex/opencode workers may stall on sandbox-blocked curl)`);
         }
 
         async function demoDriveBash(demo) {
