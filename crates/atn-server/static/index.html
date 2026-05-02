@@ -1421,23 +1421,30 @@
                 }
                 const host = document.getElementById(`term-tile-${id}`);
                 if (!host || !scaleEl) continue;
-                const hostRect = host.getBoundingClientRect();
-                const { w: natW, h: natH } = nativeTermSize(id);
-                const raw = Math.min(hostRect.width / natW, hostRect.height / natH);
-                if (raw < COMPACT_THRESHOLD) {
-                    // Too small even at the lowest snap → compact.
-                    toggleCompactMode(id);
-                    continue;
-                }
-                if (raw >= 1.0) {
-                    // Host is larger than native — instead of capping at
-                    // scale 1.0 and leaving dead space, refit xterm to
-                    // grow into the available area. cols/rows expand.
+                // Equal mode: fit() handles all sizing — xterm cols/rows
+                // are set to match the host. CSS scale stays 1.0; no
+                // snap-scale, no down-zoom. Avoids the conflict where
+                // fit() grew xterm to host size and then updateTileScales
+                // shrank the visual to ~50%.
+                if (layoutState.sizeMode === 'equal') {
                     scaleEl.style.setProperty('--term-k', '1');
                     fitOnceIfChanged(id);
                     continue;
                 }
-                // Host is smaller than native — snap to a discrete scale.
+                // Heat mode: original "stable native size" with snap-scale.
+                const hostRect = host.getBoundingClientRect();
+                const { w: natW, h: natH } = nativeTermSize(id);
+                const raw = Math.min(hostRect.width / natW, hostRect.height / natH);
+                if (raw < COMPACT_THRESHOLD) {
+                    toggleCompactMode(id);
+                    continue;
+                }
+                if (raw >= 1.0) {
+                    // Host larger than native — refit instead of capping.
+                    scaleEl.style.setProperty('--term-k', '1');
+                    fitOnceIfChanged(id);
+                    continue;
+                }
                 const k = pickTermScale(hostRect.width, hostRect.height, natW, natH);
                 if (k === null) {
                     toggleCompactMode(id);
@@ -3324,7 +3331,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'fit-grows-to-host-v12';
+        const DASHBOARD_BUILD = 'equal-no-scale-v13';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
