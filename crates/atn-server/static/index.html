@@ -3373,6 +3373,44 @@
                 const res = await fetch(`${API_BASE}/api/agents`);
                 if (!res.ok) return;
                 const list = await res.json();
+                // Detect agents that were registered server-side (e.g.
+                // by the Demos wizard, atn-cli, or another tool) but
+                // haven't been mounted as panels in this dashboard yet.
+                // Without this, the dashboard's "No agents yet" CTA
+                // stays visible even after agents exist server-side.
+                let added = 0;
+                for (const agent of list) {
+                    if (!agents.has(agent.id)) {
+                        addAgentPanel(agent);
+                        added++;
+                    }
+                }
+                if (added > 0) {
+                    clientLog('info', 'pollStates.add', `mounted ${added} agent(s) discovered via API`, {
+                        ids: list.filter((a) => !agents.has(a.id) || true).map((a) => a.id),
+                    });
+                    refreshDashboardLayout();
+                    renderSparklineRow();
+                }
+                // Detect agents that were deleted server-side and remove
+                // their panels from the local DOM.
+                const apiIds = new Set(list.map((a) => a.id));
+                let removed = 0;
+                for (const id of Array.from(agents.keys())) {
+                    if (!apiIds.has(id)) {
+                        const a = agents.get(id);
+                        if (a && a.panel) a.panel.remove();
+                        const c = document.getElementById(`compact-${id}`);
+                        if (c) c.remove();
+                        agents.delete(id);
+                        delete layoutState.windows[id];
+                        removed++;
+                    }
+                }
+                if (removed > 0) {
+                    refreshDashboardLayout();
+                    renderSparklineRow();
+                }
                 let sparkDirty = false;
                 for (const agent of list) {
                     const badge = document.getElementById(`badge-${agent.id}`);
@@ -3434,7 +3472,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'demos-wizard-v23';
+        const DASHBOARD_BUILD = 'pollstates-mount-v24';
 
         // ── Demos catalog (alphabetical by key) ───────────────
         // Each demo registers its own bash agents, then walks the user

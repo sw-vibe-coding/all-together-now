@@ -141,10 +141,24 @@ fi
 # ============================================================
 echo
 echo "═══ Condition 6 — wiki round-trip + cross-agent visibility ═══"
-NONCE="probe-$(date +%s)"
-# coordinator writes the page
-send_input coordinator "echo -e 'nonce: $NONCE\nts: $(date -u +%FT%TZ)' | $ATN_CLI wiki put Test__Echo --stdin"
-sleep 2
+NONCE="probe-$(date +%s)-$RANDOM"
+TS=$(date -u +%FT%TZ)
+# coordinator writes the page. atn-cli wiki put requires --if-match
+# when the page already exists from a prior run; we drive coordinator
+# to do the put-with-fallback (try fresh, on conflict refetch ETag
+# via --verbose and retry). The double-quoted form `"abcd..."` is
+# the RFC-7232 quoted ETag the server expects.
+PUT_CMD="
+content=\$(printf 'nonce: $NONCE\\nts: $TS\\n')
+if printf '%s' \"\$content\" | $ATN_CLI wiki put Test__Echo --stdin > /dev/null 2>&1; then
+    :
+else
+    etag=\$( ( $ATN_CLI --verbose wiki get Test__Echo > /dev/null ) 2>&1 | awk -F'\"' '/^ETag:/ { print \$2; exit }')
+    [ -n \"\$etag\" ] && printf '%s' \"\$content\" | $ATN_CLI wiki put Test__Echo --stdin --if-match \"\\\"\$etag\\\"\" > /dev/null 2>&1
+fi
+"
+send_input coordinator "$PUT_CMD"
+sleep 3
 wiki_body=$(curl -s "$URL/api/wiki/Test__Echo" | python3 -c "
 import json, sys
 try:
