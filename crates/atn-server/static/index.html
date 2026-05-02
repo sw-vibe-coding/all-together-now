@@ -1332,6 +1332,7 @@
         document.addEventListener('swap-to-focus', (e) => {
             const id = e.detail && e.detail.agentId;
             if (!id || !agents.has(id)) return;
+            const changed = layoutState.selectedId !== id;
             layoutState.focusId = id;
             // Click-to-select for compact-tile paths (peeks in carousel,
             // compact tiles in stack/tiled). Headers already set this via
@@ -1346,6 +1347,10 @@
             // setFocus handles the PTY-resize + xterm fit so the focused
             // tile is crisp at its new geometry.
             setFocus(id);
+            // Flash the new focused panel's header so peek clicks /
+            // sparkline-row clicks / compact-tile clicks all draw the
+            // user's eye to the new context — same as carousel arrows.
+            if (changed) flashAgentHeader(id);
         });
 
         // --- CSS-scaled xterm layout ---
@@ -3372,7 +3377,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'focus-flash-v15';
+        const DASHBOARD_BUILD = 'focus-flash-everywhere-v16';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
