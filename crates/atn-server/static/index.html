@@ -16,7 +16,10 @@
         .dashboard.cols-1 { grid-template-columns: 1fr; }
         .dashboard.cols-2 { grid-template-columns: 1fr 1fr; }
         .dashboard.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
-        .dashboard.cols-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        /* cols-4 used to be a fixed 2×2 (`grid-template-rows: 1fr 1fr`)
+           which collapsed agents 5+ into auto-height rows. Use
+           grid-auto-rows so any N>3 packs cleanly: 4→2x2, 5-6→2x3, etc. */
+        .dashboard.cols-4 { grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(0, 1fr); }
 
         /* Filter bar: text input + chips + group toggle + saved-layouts dropdown.
            Sits between the view tabs (in the main header) and the pin row. */
@@ -2815,8 +2818,15 @@
                 // on every panel. Those inline styles override CSS grid;
                 // without clearing them, switching to Equal looks identical
                 // to Heat until a hard-reload. Same for the off-screen
-                // hidden panels (left:-9999px). Reset all of them.
+                // hidden panels (left:-9999px). Also: promote any
+                // .agent-compact tile back to .agent-panel — Equal grid
+                // gives every tile the same area, so compact's reduced
+                // mode is unnecessary AND it confuses count-based cols-N.
                 for (const id of agents.keys()) {
+                    const a = agents.get(id);
+                    if (a && a.mode === 'compact') {
+                        toggleCompactMode(id); // swaps compact → xterm
+                    }
                     const el = document.getElementById(`panel-${id}`)
                         || document.getElementById(`compact-${id}`);
                     if (!el) continue;
@@ -3294,7 +3304,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'tiled-uses-all-v8';
+        const DASHBOARD_BUILD = 'cols4-auto-rows-v10';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
@@ -3637,7 +3647,12 @@
 
         function refreshDashboardLayout() {
             const dashboard = document.getElementById('dashboard');
-            const count = dashboard.querySelectorAll('.agent-panel').length;
+            // Count the agents Map, not just .agent-panel DOM nodes —
+            // some agents may currently be in .agent-compact mode (demoted
+            // by the heat-treemap when their tile shrank below xterm
+            // threshold), and they should still count toward the grid
+            // column-count decision.
+            const count = agents.size;
             document.getElementById('agent-count').textContent = `${count} agent${count !== 1 ? 's' : ''}`;
             if (count <= 1) dashboard.className = 'dashboard cols-1';
             else if (count <= 2) dashboard.className = 'dashboard cols-2';
