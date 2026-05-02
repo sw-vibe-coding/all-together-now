@@ -3386,7 +3386,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'centered-panel-title-v18';
+        const DASHBOARD_BUILD = 'graph-edges-tricolor-cbf-v20';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
@@ -4897,12 +4897,32 @@
             }
 
             let svg = `<svg class="graph-svg" viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg">`;
-            svg += `<defs><marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560" /></marker></defs>`;
+            // Three arrowheads: red (active <2s), blue (recent), gray (static).
+            svg += `<defs>`;
+            svg += `<marker id="arrowhead-red"  markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560" /></marker>`;
+            svg += `<marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa" /></marker>`;
+            svg += `<marker id="arrowhead-gray" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6b7280" opacity="0.4" /></marker>`;
+            svg += `</defs>`;
 
-            // Recent event-driven edges. Opacity decays linearly from 1
-            // (just-fired) to ~0 (about to expire). Last-write-wins per
-            // (source, target) so a fresh event resets the fade.
+            // (1) Static topology edges: coordinator → every worker.
+            // Drawn first (under everything else) as gray dotted lines
+            // so the registered relationships are always visible even
+            // when no events have flowed.
+            if (coordinator) {
+                const cp = positions[coordinator.id];
+                for (const other of others) {
+                    const op = positions[other.id];
+                    svg += `<line x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" stroke="#6b7280" stroke-width="1" stroke-dasharray="4 4" opacity="0.35" marker-end="url(#arrowhead-gray)" />`;
+                }
+            }
+
+            // (2) Event-driven edges with two-stage color fade:
+            //   age < ACTIVE_WINDOW (2s)  → red   (current activity)
+            //   age >= ACTIVE_WINDOW       → blue  (recent, fading)
+            // Last-write-wins per (source, target) so a fresh event
+            // resets the fade.
             pruneRecentEdges();
+            const ACTIVE_WINDOW_MS = 2000;
             const edgeMap = new Map(); // key=`${src}->${tgt}` → expiresAt (latest)
             for (const e of recentEdges) {
                 const key = `${e.source}->${e.target}`;
@@ -4914,20 +4934,41 @@
                 const [src, tgt] = key.split('->');
                 const from = positions[src];
                 const to = positions[tgt];
-                if (!from || !to) continue; // edge points at a deleted/unknown agent
+                if (!from || !to) continue;
                 const remaining = expiresAt - now;
-                const opacity = Math.max(0.15, Math.min(1, remaining / RECENT_EDGE_TTL_MS));
-                svg += `<line class="graph-edge" x1="${from.x + nodeW}" y1="${from.y + nodeH / 2}" x2="${to.x}" y2="${to.y + nodeH / 2}" marker-end="url(#arrowhead)" style="opacity:${opacity.toFixed(2)}" />`;
+                const age = RECENT_EDGE_TTL_MS - remaining;
+                let stroke, marker, opacity, width;
+                let dash = '';
+                if (age < ACTIVE_WINDOW_MS) {
+                    // Red — currently active. SOLID (no dash) so the
+                    // line style is also distinguishable from the
+                    // recent/static edges for color-blind users.
+                    stroke = '#e94560';
+                    marker = 'arrowhead-red';
+                    opacity = 1;
+                    width = 2.5;
+                    dash = '';
+                } else {
+                    // Blue — recent, fading. Long-dash pattern (6 3)
+                    // distinct from the static gray's tight 4 4.
+                    stroke = '#60a5fa';
+                    marker = 'arrowhead-blue';
+                    opacity = Math.max(0.2, remaining / RECENT_EDGE_TTL_MS);
+                    width = 2;
+                    dash = '6 3';
+                }
+                const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
+                svg += `<line x1="${from.x + nodeW}" y1="${from.y + nodeH / 2}" x2="${to.x}" y2="${to.y + nodeH / 2}" stroke="${stroke}" stroke-width="${width}" opacity="${opacity.toFixed(2)}"${dashAttr} marker-end="url(#${marker})" />`;
             }
 
-            // Explicit blocked_on edges (full opacity).
+            // (3) Explicit blocked_on edges — full opacity, red.
             for (const node of nodes) {
                 const to = positions[node.id];
                 if (!to) continue;
                 for (const dep of node.blocked_on) {
                     const from = positions[dep];
                     if (!from) continue;
-                    svg += `<line class="graph-edge" x1="${from.x + nodeW / 2}" y1="${from.y + nodeH}" x2="${to.x + nodeW / 2}" y2="${to.y}" marker-end="url(#arrowhead)" />`;
+                    svg += `<line x1="${from.x + nodeW / 2}" y1="${from.y + nodeH}" x2="${to.x + nodeW / 2}" y2="${to.y}" stroke="#e94560" stroke-width="2" marker-end="url(#arrowhead-red)" />`;
                 }
             }
 
