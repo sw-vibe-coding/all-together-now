@@ -3386,7 +3386,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'graph-edges-tricolor-cbf-v20';
+        const DASHBOARD_BUILD = 'graph-static-white-v21';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
@@ -4901,7 +4901,7 @@
             svg += `<defs>`;
             svg += `<marker id="arrowhead-red"  markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e94560" /></marker>`;
             svg += `<marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa" /></marker>`;
-            svg += `<marker id="arrowhead-gray" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#6b7280" opacity="0.4" /></marker>`;
+            svg += `<marker id="arrowhead-gray" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#e5e7eb" opacity="0.55" /></marker>`;
             svg += `</defs>`;
 
             // (1) Static topology edges: coordinator → every worker.
@@ -4912,7 +4912,7 @@
                 const cp = positions[coordinator.id];
                 for (const other of others) {
                     const op = positions[other.id];
-                    svg += `<line x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" stroke="#6b7280" stroke-width="1" stroke-dasharray="4 4" opacity="0.35" marker-end="url(#arrowhead-gray)" />`;
+                    svg += `<line x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" stroke="#e5e7eb" stroke-width="1.25" stroke-dasharray="4 4" opacity="0.55" marker-end="url(#arrowhead-gray)" />`;
                 }
             }
 
