@@ -3472,7 +3472,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'pollstates-mount-v24';
+        const DASHBOARD_BUILD = 'drop-empty-state-v25';
 
         // ── Demos catalog (alphabetical by key) ───────────────
         // Each demo registers its own bash agents, then walks the user
@@ -4035,6 +4035,10 @@
 
         function addAgentPanel(agent) {
             const dashboard = document.getElementById('dashboard');
+            // Drop any "No agents yet" empty-state card — it was inserted
+            // in init() when count was 0 and isn't auto-removed on later
+            // agent additions (Demos wizard, atn-cli, etc.).
+            dashboard.querySelectorAll('.empty-state').forEach((n) => n.remove());
             const panel = createAgentPanel(agent);
             dashboard.appendChild(panel);
 
