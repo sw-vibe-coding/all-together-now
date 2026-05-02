@@ -2738,10 +2738,21 @@
                 const sel = document.getElementById(`panel-${layoutState.selectedId}`);
                 if (sel) {
                     sel.classList.add('selected');
-                    // Selected non-minimized tile gets full xterm fit.
-                    fitSelectedTerm(layoutState.selectedId);
                 }
             }
+            // Refit every visible xterm panel — `applyLayout` resized
+            // every container but xterm doesn't auto-detect that, so
+            // the cols/rows stay at whatever they were when the panel
+            // first rendered. Without this, switching tiled→carousel
+            // makes the focused panel grow but its xterm still has the
+            // smaller geometry and the bottom rows render off-screen.
+            // `fitOnceIfChanged` skips no-op fits via its rect cache.
+            requestAnimationFrame(() => {
+                for (const w of windows) {
+                    if (!agents.has(w.id)) continue;
+                    fitOnceIfChanged(w.id);
+                }
+            });
             // Step 1 has no group bands; clear any that may have been left
             // over from a stale layout.
             dashboard.querySelectorAll('.group-band').forEach((b) => b.remove());
@@ -3249,7 +3260,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'panel-replay-v5';
+        const DASHBOARD_BUILD = 'refit-on-layout-v6';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
