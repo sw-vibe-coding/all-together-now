@@ -3386,7 +3386,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'graph-static-white-v21';
+        const DASHBOARD_BUILD = 'graph-thicker-v22';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
@@ -4912,7 +4912,7 @@
                 const cp = positions[coordinator.id];
                 for (const other of others) {
                     const op = positions[other.id];
-                    svg += `<line x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" stroke="#e5e7eb" stroke-width="1.25" stroke-dasharray="4 4" opacity="0.55" marker-end="url(#arrowhead-gray)" />`;
+                    svg += `<line x1="${cp.x + nodeW}" y1="${cp.y + nodeH / 2}" x2="${op.x}" y2="${op.y + nodeH / 2}" stroke="#e5e7eb" stroke-width="2" stroke-dasharray="4 4" opacity="0.55" marker-end="url(#arrowhead-gray)" />`;
                 }
             }
 
@@ -4946,7 +4946,7 @@
                     stroke = '#e94560';
                     marker = 'arrowhead-red';
                     opacity = 1;
-                    width = 2.5;
+                    width = 4;
                     dash = '';
                 } else {
                     // Blue — recent, fading. Long-dash pattern (6 3)
@@ -4954,7 +4954,7 @@
                     stroke = '#60a5fa';
                     marker = 'arrowhead-blue';
                     opacity = Math.max(0.2, remaining / RECENT_EDGE_TTL_MS);
-                    width = 2;
+                    width = 3;
                     dash = '6 3';
                 }
                 const dashAttr = dash ? ` stroke-dasharray="${dash}"` : '';
@@ -4968,7 +4968,7 @@
                 for (const dep of node.blocked_on) {
                     const from = positions[dep];
                     if (!from) continue;
-                    svg += `<line x1="${from.x + nodeW / 2}" y1="${from.y + nodeH}" x2="${to.x + nodeW / 2}" y2="${to.y}" stroke="#e94560" stroke-width="2" marker-end="url(#arrowhead-red)" />`;
+                    svg += `<line x1="${from.x + nodeW / 2}" y1="${from.y + nodeH}" x2="${to.x + nodeW / 2}" y2="${to.y}" stroke="#e94560" stroke-width="3" marker-end="url(#arrowhead-red)" />`;
                 }
             }
 
