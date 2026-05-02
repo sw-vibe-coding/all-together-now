@@ -522,6 +522,42 @@
         .graph-node rect { stroke-width: 2; rx: 8; ry: 8; }
         .graph-node text { fill: #c9d1d9; font-size: 13px; font-family: system-ui, sans-serif; }
         .graph-edge { stroke: #e94560; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+
+        /* Demos dropdown + wizard overlay */
+        .demos-menu { position: relative; display: inline-block; }
+        .demos-btn { padding: 4px 10px; border: 1px solid #0f3460; border-radius: 4px; background: transparent; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+        .demos-btn:hover { background: #0f3460; }
+        .demos-dropdown { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; background: #16213e; border: 1px solid #0f3460; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 50; min-width: 280px; }
+        .demos-dropdown.visible { display: block; }
+        .demos-dropdown .demo-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #0f3460; }
+        .demos-dropdown .demo-item:last-child { border-bottom: none; }
+        .demos-dropdown .demo-item:hover { background: #0f3460; }
+        .demos-dropdown .demo-name { font-weight: 600; color: #4ecca3; font-size: 13px; }
+        .demos-dropdown .demo-desc { font-size: 11px; color: #888; margin-top: 2px; }
+
+        .demo-wizard {
+            display: none;
+            position: fixed; bottom: 16px; right: 16px;
+            width: 380px; max-height: 60vh; overflow-y: auto;
+            background: #16213e; border: 1px solid #4ecca3; border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            z-index: 100;
+            font-size: 13px;
+        }
+        .demo-wizard.visible { display: block; }
+        .demo-wizard.collapsed { max-height: 36px; overflow: hidden; }
+        .demo-wizard-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #0f3460; background: #0f3460; cursor: pointer; }
+        .demo-wizard-head .dw-title { flex: 1; font-weight: 600; color: #4ecca3; }
+        .demo-wizard-head .dw-step-num { color: #888; font-size: 11px; }
+        .demo-wizard-head .dw-min { background: transparent; border: none; color: #c9d1d9; cursor: pointer; font-size: 16px; padding: 0 4px; }
+        .demo-wizard-body { padding: 12px; }
+        .demo-wizard-body p { margin: 0 0 12px; color: #c9d1d9; line-height: 1.4; }
+        .demo-wizard-body .dw-btn-row { display: flex; gap: 8px; }
+        .demo-wizard-body .dw-btn { padding: 6px 14px; border: 1px solid #4ecca3; border-radius: 4px; background: #4ecca3; color: #0d1117; cursor: pointer; font-size: 12px; font-weight: 600; }
+        .demo-wizard-body .dw-btn:hover { background: #3db892; }
+        .demo-wizard-body .dw-btn.secondary { background: transparent; color: #c9d1d9; border-color: #0f3460; font-weight: normal; }
+        .demo-wizard-body .dw-btn.secondary:hover { background: #0f3460; }
+        .demo-wizard-body .dw-progress { font-family: monospace; font-size: 11px; color: #888; padding: 6px 0 0; border-top: 1px solid #0f3460; margin-top: 8px; max-height: 100px; overflow-y: auto; }
     </style>
 </head>
 <body>
@@ -530,6 +566,10 @@
         <span class="agent-count" id="agent-count"></span>
         <button class="btn-save-cfg" id="btn-save-toml" onclick="saveToToml()" title="Save current agents to agents.toml">Save</button>
         <button style="padding:4px 10px;border:1px solid #0f3460;border-radius:4px;background:transparent;color:#4ecca3;cursor:pointer;font-size:12px;" id="btn-new-agent" onclick="toggleNewAgent()">+ Agent</button>
+        <div class="demos-menu">
+            <button class="demos-btn" id="btn-demos" onclick="toggleDemosDropdown(event)" title="Run a built-in demo">Demos ▾</button>
+            <div class="demos-dropdown" id="demos-dropdown"></div>
+        </div>
         <div class="layout-selector" id="layout-selector" title="Window layout mode">
             <span class="layout-label">layout</span>
             <button class="layout-btn active" data-layout="tiled">Tiled</button>
@@ -642,6 +682,14 @@
             <button id="layout-apply" title="Apply selected layout">Apply</button>
             <button id="layout-delete" title="Delete selected layout">Delete</button>
         </span>
+    </div>
+    <div class="demo-wizard" id="demo-wizard">
+        <div class="demo-wizard-head" onclick="toggleWizardCollapsed()">
+            <span class="dw-title" id="dw-title">Demo</span>
+            <span class="dw-step-num" id="dw-step-num"></span>
+            <button class="dw-min" id="dw-min" title="Collapse / expand">_</button>
+        </div>
+        <div class="demo-wizard-body" id="demo-wizard-body"></div>
     </div>
     <div class="sparkline-row" id="sparkline-row"></div>
     <div class="dashboard" id="dashboard"></div>
@@ -3386,7 +3434,257 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'graph-thicker-v22';
+        const DASHBOARD_BUILD = 'demos-wizard-v23';
+
+        // ── Demos catalog (alphabetical by key) ───────────────
+        // Each demo registers its own bash agents, then walks the user
+        // through a step-by-step wizard that auto-runs setup and
+        // pauses on manual checkpoints (e.g. grant permissions).
+        const DEMOS = {
+            'factory-line': {
+                name: 'factory-line',
+                description: 'Factorio-style 6-agent production chain (gather → smelt → stamp → assemble)',
+                projectRoot: '/Users/mike/github/softwarewrighter/factory-line',
+                agents: [
+                    { name: 'coordinator', role: 'coordinator', subdir: 'coordinator' },
+                    { name: 'gatherer-iron', role: 'worker', subdir: 'gatherer-iron' },
+                    { name: 'gatherer-coal', role: 'worker', subdir: 'gatherer-coal' },
+                    { name: 'smelter', role: 'worker', subdir: 'smelter' },
+                    { name: 'stamper', role: 'worker', subdir: 'stamper' },
+                    { name: 'assembler', role: 'worker', subdir: 'assembler' },
+                ],
+                kickoffPrompt: 'Goal: build 2 gadgets and 2 gizmos.\n\nRead AGENTS.md and follow it.',
+                steps: [
+                    {
+                        id: 'setup',
+                        title: 'Register agents',
+                        body: 'Tearing down any existing topology and registering 6 bash agents (coordinator + 5 workers).',
+                        auto: true,
+                        action: 'setup',
+                    },
+                    {
+                        id: 'permissions',
+                        title: 'Grant permissions (if any)',
+                        body: 'Each agent panel is now showing a bash shell. If any panel needs your input (e.g. a permission prompt), click into it and respond. When all agents look idle and ready, click Proceed.',
+                        button: 'Proceed',
+                    },
+                    {
+                        id: 'kickoff',
+                        title: 'Drive the production line',
+                        body: 'Sending tasks down the chain via direct PTY input (bash mode — no AI required). Watch the Events tab as messages flow.',
+                        auto: true,
+                        action: 'driveBash',
+                    },
+                    {
+                        id: 'observe',
+                        title: 'Verify',
+                        body: 'Switch between tabs to confirm: Events shows 5 routed Done messages; Wiki shows Production__Goals + Inventory__* + Production__Log; output/widget.txt was written. Click Done when satisfied.',
+                        button: 'Done',
+                    },
+                ],
+            },
+            'self-test-line': {
+                name: 'self-test-line',
+                description: '3-agent regression test (write → ack → cross-confirm chain on a wiki page)',
+                projectRoot: '/Users/mike/github/softwarewrighter/self-test-line',
+                agents: [
+                    { name: 'coordinator', role: 'coordinator', subdir: 'coordinator' },
+                    { name: 'alpha', role: 'worker', subdir: 'alpha' },
+                    { name: 'beta', role: 'worker', subdir: 'beta' },
+                ],
+                steps: [
+                    {
+                        id: 'setup',
+                        title: 'Register 3 bash agents',
+                        body: 'Tearing down any existing topology and registering coordinator + alpha + beta (all bash).',
+                        auto: true,
+                        action: 'setup',
+                    },
+                    {
+                        id: 'verify',
+                        title: 'Run verify.sh',
+                        body: 'In a terminal: <code>./demos/self-test-line/verify.sh</code> — asserts the 6 sanity-check conditions (cwd, TUI, awaiting state, graph nodes, two-way events, wiki round-trip). Exit 0 on full PASS. Click Done when verify reports 10/10.',
+                        button: 'Done',
+                    },
+                ],
+            },
+        };
+
+        const wizardState = { demoKey: null, stepIdx: 0, log: [] };
+
+        function toggleDemosDropdown(ev) {
+            ev && ev.stopPropagation();
+            const dd = document.getElementById('demos-dropdown');
+            const visible = dd.classList.toggle('visible');
+            if (visible) populateDemosDropdown();
+        }
+
+        function populateDemosDropdown() {
+            const dd = document.getElementById('demos-dropdown');
+            const keys = Object.keys(DEMOS).sort();
+            dd.innerHTML = keys.map((k) => {
+                const d = DEMOS[k];
+                return `<div class="demo-item" onclick="startDemo('${k}')">
+                    <div class="demo-name">${d.name}</div>
+                    <div class="demo-desc">${d.description}</div>
+                </div>`;
+            }).join('');
+        }
+
+        // Close dropdown on outside click.
+        document.addEventListener('click', (e) => {
+            const dd = document.getElementById('demos-dropdown');
+            if (!dd) return;
+            if (!dd.classList.contains('visible')) return;
+            const menu = e.target.closest('.demos-menu');
+            if (!menu) dd.classList.remove('visible');
+        });
+
+        async function startDemo(demoKey) {
+            const demo = DEMOS[demoKey];
+            if (!demo) return;
+            document.getElementById('demos-dropdown').classList.remove('visible');
+            wizardState.demoKey = demoKey;
+            wizardState.stepIdx = 0;
+            wizardState.log = [];
+            document.getElementById('demo-wizard').classList.add('visible');
+            document.getElementById('demo-wizard').classList.remove('collapsed');
+            renderWizard();
+            await runStep();
+        }
+
+        function renderWizard() {
+            const demo = DEMOS[wizardState.demoKey];
+            if (!demo) return;
+            const step = demo.steps[wizardState.stepIdx];
+            document.getElementById('dw-title').textContent = `${demo.name}: ${step.title}`;
+            document.getElementById('dw-step-num').textContent = `${wizardState.stepIdx + 1}/${demo.steps.length}`;
+            const body = document.getElementById('demo-wizard-body');
+            const logHtml = wizardState.log.length
+                ? `<div class="dw-progress">${wizardState.log.slice(-12).map((l) => `<div>${l}</div>`).join('')}</div>`
+                : '';
+            const btnRow = step.auto
+                ? `<div class="dw-btn-row"><span style="color:#888;font-size:11px;">Running…</span></div>`
+                : `<div class="dw-btn-row">
+                    <button class="dw-btn" onclick="advanceWizard()">${step.button || 'Continue'}</button>
+                    <button class="dw-btn secondary" onclick="cancelWizard()">Cancel</button>
+                  </div>`;
+            body.innerHTML = `<p>${step.body}</p>${btnRow}${logHtml}`;
+        }
+
+        function wizardLog(line) {
+            const ts = new Date().toLocaleTimeString();
+            wizardState.log.push(`${ts}  ${line}`);
+            renderWizard();
+        }
+
+        async function runStep() {
+            const demo = DEMOS[wizardState.demoKey];
+            if (!demo) return;
+            const step = demo.steps[wizardState.stepIdx];
+            if (!step.auto) return; // wait for button click
+            try {
+                if (step.action === 'setup') {
+                    await demoSetup(demo);
+                } else if (step.action === 'driveBash') {
+                    await demoDriveBash(demo);
+                }
+                advanceWizard();
+            } catch (e) {
+                wizardLog(`✗ step failed: ${e}`);
+                clientLog('error', 'demo-wizard', String(e), { demo: demo.name, step: step.id });
+            }
+        }
+
+        async function advanceWizard() {
+            const demo = DEMOS[wizardState.demoKey];
+            if (!demo) return;
+            if (wizardState.stepIdx >= demo.steps.length - 1) {
+                cancelWizard();
+                return;
+            }
+            wizardState.stepIdx++;
+            renderWizard();
+            await runStep();
+        }
+
+        function cancelWizard() {
+            document.getElementById('demo-wizard').classList.remove('visible');
+            wizardState.demoKey = null;
+        }
+
+        function toggleWizardCollapsed() {
+            document.getElementById('demo-wizard').classList.toggle('collapsed');
+        }
+
+        async function demoSetup(demo) {
+            wizardLog(`tearing down existing agents...`);
+            const list = await fetch(`${API_BASE}/api/agents`).then((r) => r.json());
+            for (const a of list) {
+                await fetch(`${API_BASE}/api/agents/${a.id}`, { method: 'DELETE' });
+            }
+            wizardLog(`✓ deleted ${list.length} agents`);
+            wizardLog(`registering ${demo.agents.length} agents...`);
+            for (const a of demo.agents) {
+                const spec = {
+                    name: a.name,
+                    role: a.role,
+                    transport: 'local',
+                    working_dir: `${demo.projectRoot}/${a.subdir}`,
+                    project: demo.name,
+                    agent: 'bash',
+                };
+                const res = await fetch(`${API_BASE}/api/agents`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(spec),
+                });
+                if (!res.ok) throw new Error(`POST ${a.name} -> ${res.status}`);
+                wizardLog(`  ✓ ${a.name}`);
+            }
+            wizardLog(`✓ topology registered. reload may be needed for full UI sync.`);
+        }
+
+        async function demoDriveBash(demo) {
+            // For factory-line: drive the chain via direct /api/agents/<id>/input.
+            if (demo.name !== 'factory-line') return;
+            const send = async (id, cmd) => {
+                await fetch(`${API_BASE}/api/agents/${id}/input`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: cmd + '\r', raw_bytes: [] }),
+                });
+            };
+            const waitEvents = async (target) => {
+                for (let i = 0; i < 30; i++) {
+                    const ev = await fetch(`${API_BASE}/api/events`).then((r) => r.json());
+                    if (ev.length >= target) return ev.length;
+                    await new Promise((r) => setTimeout(r, 500));
+                }
+                return -1;
+            };
+            wizardLog(`stage 1: gatherers (parallel)...`);
+            await send('gatherer-iron', `mkdir -p ../inventory && printf '{"agent":"gatherer-iron","items":{"iron-ore":4}}\\n' > ../inventory/gatherer-iron.json && ./atn-send coordinator "Done: gathered 4 iron-ore"`);
+            await send('gatherer-coal', `mkdir -p ../inventory && printf '{"agent":"gatherer-coal","items":{"coal":4}}\\n' > ../inventory/gatherer-coal.json && ./atn-send coordinator "Done: gathered 4 coal"`);
+            const e1 = await waitEvents(2);
+            wizardLog(`  events=${e1} after gatherers`);
+
+            wizardLog(`stage 2: smelter...`);
+            await send('smelter', `mkdir -p ../inventory && printf '{"agent":"smelter","items":{"ingot":4}}\\n' > ../inventory/smelter.json && ./atn-send coordinator "Done: smelted 4 ingots"`);
+            const e2 = await waitEvents(3);
+            wizardLog(`  events=${e2} after smelter`);
+
+            wizardLog(`stage 3: stamper...`);
+            await send('stamper', `mkdir -p ../inventory && printf '{"agent":"stamper","items":{"widget":4}}\\n' > ../inventory/stamper.json && ./atn-send coordinator "Done: stamped 4 widgets"`);
+            const e3 = await waitEvents(4);
+            wizardLog(`  events=${e3} after stamper`);
+
+            wizardLog(`stage 4: assembler...`);
+            await send('assembler', `mkdir -p ../output && printf 'gadgets: [g1] [g2]\\ngizmos: [z1] [z2]\\n' > ../output/widget.txt && ./atn-send coordinator "Done: assembled 2 gadgets + 2 gizmos"`);
+            const e4 = await waitEvents(5);
+            wizardLog(`  events=${e4} after assembler`);
+            wizardLog(`✓ DAG complete — Wiki tab + output/widget.txt should be populated.`);
+        }
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
