@@ -3014,6 +3014,22 @@
                 },
             });
 
+            // Replay the agent's recent terminal state into the xterm
+            // before live SSE takes over — without this, an idle agent
+            // (no new bytes flowing) renders a blank panel after reload.
+            // The screenshot endpoint reads the transcript file and
+            // re-emits it as ANSI; xterm interprets the escape sequences
+            // and reproduces the visible state.
+            loggedFetch('connectSSE.replay', `${API_BASE}/api/agents/${agentId}/screenshot?format=ansi&rows=40&cols=120`)
+                .then((r) => r.ok ? r.text() : null)
+                .then((ansi) => {
+                    if (ansi && agent.term) {
+                        agent.term.write(ansi);
+                        clientLog('info', 'connectSSE.replay', `${agentId} replayed ${ansi.length} chars`);
+                    }
+                })
+                .catch((e) => clientLog('warn', 'connectSSE.replay', `${agentId} replay failed: ${e}`));
+
             // Lazily open the shared stream on the first agent registration.
             ensureMultiplexedSse();
             // Compat field so existing code that checks `agent.evtSource`
@@ -3233,7 +3249,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'sse-multiplexed-v4';
+        const DASHBOARD_BUILD = 'panel-replay-v5';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);

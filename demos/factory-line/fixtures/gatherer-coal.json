@@ -5,5 +5,6 @@
     "working_dir": "/Users/mike/github/softwarewrighter/factory-line/gatherer-coal",
     "project": "factory-line",
     "agent": "opencode",
+    "agent_args": "run",
     "agent_prompt": "read AGENTS.md and follow it"
 }

@@ -83,14 +83,15 @@ echo "  widget.txt:"
 sed 's/^/    /' "$PROJECT/output/widget.txt"
 echo
 echo "  /api/events:"
-curl -s "$URL/api/events" | python3 -c '
-import json, sys
-events = json.load(sys.stdin)
-print(f"    total={len(events)}, all delivered={all(e.get(\"delivered\") for e in events)}")
+curl -s "$URL/api/events" > /tmp/_drive_bash_events.json
+python3 - <<'PY'
+import json
+events = json.load(open('/tmp/_drive_bash_events.json'))
+print(f"    total={len(events)}, all delivered={all(e.get('delivered') for e in events)}")
 for e in events:
-    ev = e["event"]
-    src = ev["source_agent"]
-    tgt = ev["target_agent"]
-    summ = ev["summary"][:60]
+    ev = e['event']
+    src = ev['source_agent']
+    tgt = ev['target_agent']
+    summ = ev['summary'][:60]
     print(f"    {src:>14}  →  {tgt:<14}  {summ}")
-'
+PY
