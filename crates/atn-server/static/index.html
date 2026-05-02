@@ -2535,16 +2535,21 @@
                 const peekW = Math.floor(rect.w * PEEK_FRAC);
                 const peekGap = 8;
                 const primaryW = rect.w - 2 * (peekW + peekGap);
-                const primaryH = Math.floor(rect.h * 0.9);
-                const peekH = Math.floor(rect.h * 0.7);
+                // Use full dashboard height for primary + peeks. The
+                // previous 0.9/0.7 height fractions left ~10%/30% of
+                // empty space top+bottom of the dashboard area for no
+                // reason — peeks are at the SIDES, not above/below, so
+                // they don't need vertical room.
+                const primaryH = rect.h;
+                const peekH = rect.h;
                 const primaryRect = {
                     id: focused.id,
                     x: rect.x + peekW + peekGap,
-                    y: rect.y + Math.floor((rect.h - primaryH) / 2),
+                    y: rect.y,
                     w: primaryW, h: primaryH,
                 };
                 const windows = [primaryRect];
-                const peekY = rect.y + Math.floor((rect.h - peekH) / 2);
+                const peekY = rect.y;
                 if (prev && prev.id !== focused.id) {
                     windows.push({
                         id: prev.id,
@@ -3331,7 +3336,7 @@
             });
         }
 
-        const DASHBOARD_BUILD = 'equal-no-scale-v13';
+        const DASHBOARD_BUILD = 'carousel-full-height-v14';
         async function init() {
             clientLog('info', 'init.start', `dashboard boot build=${DASHBOARD_BUILD} ua=${navigator.userAgent.slice(0, 60)}`);
             const res = await loggedFetch('init', `${API_BASE}/api/agents`);
